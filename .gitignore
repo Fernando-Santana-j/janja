@@ -1,18 +1,15 @@
-# Builds e pacotes
+
 /target/
 /dist/
 /*.zip
 /*.exe
 **/*.rs.bk
 
-# Dependências, caches e relatórios de teste
 /node_modules/
 /test-results/
 /playwright-report/
 __pycache__/
 *.py[cod]
-
-# Configuração local, credenciais e diagnóstico
 .env
 .env.*
 !.env.example
@@ -27,7 +24,6 @@ __pycache__/
 *.log
 /janja-*.jsonl
 
-# Arquivos e instruções de ferramentas de IA
 .agents/
 .codex/
 .claude/
@@ -43,7 +39,11 @@ GEMINI.md
 /.github/copilot-instructions.md
 /docs/superpowers/
 
-# Arquivos do sistema operacional
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+
+/tests/
+/docs/
+/bugs/
