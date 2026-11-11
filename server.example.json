@@ -1,0 +1,11 @@
+{
+  "key": "SUBSTITUA-POR-UMA-CHAVE-ALEATORIA",
+  "origin": "https://SEU-PC.SUA-REDE.ts.net",
+  "iceServers": [
+    {
+      "urls": ["turn:SEU-TURN:3478?transport=udp", "turns:SEU-TURN:443?transport=tcp"],
+      "username": "USUARIO-TURN",
+      "credential": "CREDENCIAL-TURN"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+name: Native client
+on: [workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb pkg-config python3 libgtk-3-dev libdbus-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-nice gstreamer1.0-pipewire
+      - run: cargo test --locked --features native,portable
+      - run: cargo test --locked --features native actual_webrtc_loopback_decodes_video_and_audio -- --ignored
+      - run: xvfb-run -a cargo test --locked --features native tiles_keep_controls_and_restore_fullscreen_on_close -- --ignored --test-threads=1
+      - run: python3 scripts/package-native.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: janja-linux
+          path: dist/janja-linux
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-rust mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils
+            mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-gtk3 mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad mingw-w64-ucrt-x86_64-gst-plugins-ugly
+            mingw-w64-ucrt-x86_64-gst-libav mingw-w64-ucrt-x86_64-libnice
+      - run: cargo test --locked --features native,portable
+      - run: cargo test --locked --features native actual_webrtc_loopback_decodes_video_and_audio -- --ignored
+      - run: python scripts/package-native.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: janja-windows
+          path: dist/janja-windows.exe

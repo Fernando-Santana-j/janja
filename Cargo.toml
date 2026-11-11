@@ -1,0 +1,46 @@
+[package]
+name = "sala"
+version = "0.1.0"
+edition = "2024"
+default-run = "janja"
+
+[features]
+diagnostics = []
+portable = ["dep:zip"]
+native = ["dep:rustls", "dep:gtk", "dep:gst", "dep:gst-app", "dep:gst-video", "dep:glib-old", "dep:dbus", "tokio-tungstenite/rustls-tls-native-roots"]
+
+[[bin]]
+name = "janja"
+path = "src/bin/janja.rs"
+required-features = ["native"]
+
+[[bin]]
+name = "janja-portable"
+path = "src/bin/janja-portable.rs"
+required-features = ["portable"]
+
+[dependencies]
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"], optional = true }
+zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
+gtk = { version = "0.18", optional = true }
+gst = { package = "gstreamer", version = "0.16", features = ["v1_18"], optional = true }
+gst-video = { package = "gstreamer-video", version = "0.16", optional = true }
+gst-app = { package = "gstreamer-app", version = "0.16", features = ["v1_18"], optional = true }
+glib-old = { package = "glib", version = "0.10", optional = true }
+
+httparse = "1"
+tokio-tungstenite = "0.26"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+url = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = { version = "0.9", optional = true }

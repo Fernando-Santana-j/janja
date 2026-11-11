@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/cloudflare.test.js",
+    "start:cloudflare": "node scripts/cloudflare.mjs"
+  }
+}
