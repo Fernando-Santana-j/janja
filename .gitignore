@@ -1,4 +1,9 @@
 
+/tests/
+/docs/*
+!/docs/auditoria-20261112.md
+!/docs/medicoes-20261112.json
+/bugs/
 /target/
 /dist/
 /*.zip
@@ -42,8 +47,3 @@ GEMINI.md
 .DS_Store
 Thumbs.db
 Desktop.ini
-
-
-/tests/
-/docs/
-/bugs/

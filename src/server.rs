@@ -209,15 +209,17 @@ impl Room {
     }
     fn select(&mut self, id: u64, room: Option<u64>) -> bool {
         if let Some(peer) = self.peers.get_mut(&id) {
+            let selected =
+                room.and_then(|r| self.channels.get(&r).map(|v| json!({"id":r,"name":v.name})));
+            if !send(&peer.tx, json!({"type":"entered","room":selected})) {
+                return false;
+            }
             peer.info.streaming = false;
             if let Some(room) = room {
                 self.memberships.insert(id, room);
             } else {
                 self.memberships.remove(&id);
             }
-            let selected =
-                room.and_then(|r| self.channels.get(&r).map(|v| json!({"id":r,"name":v.name})));
-            send(&peer.tx, json!({"type":"entered","room":selected}));
             self.prune();
             self.broadcast();
         }
@@ -730,6 +732,45 @@ async fn serve(app: Shared, port: u16) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn room_selection_requires_delivery_before_changing_membership() {
+        let mut room = Room::default();
+        let (tx, mut rx) = mpsc::channel(1);
+        assert!(send(&tx, json!({"type":"pending"})));
+        room.peers.insert(
+            1,
+            Peer {
+                modern: true,
+                info: Person {
+                    id: 1,
+                    name: "Amigo".into(),
+                    streaming: true,
+                },
+                tx,
+            },
+        );
+        room.memberships.insert(1, 0);
+        room.channels.insert(
+            2,
+            PrivateRoom {
+                name: "Destino".into(),
+                password: None,
+            },
+        );
+
+        assert!(!room.select(1, Some(2)));
+        assert_eq!(room.memberships.get(&1), Some(&0));
+        assert!(room.peers[&1].info.streaming);
+        assert_eq!(rx.try_recv().unwrap()["type"], "pending");
+
+        assert!(room.select(1, Some(2)));
+        assert_eq!(room.memberships.get(&1), Some(&2));
+        assert!(!room.peers[&1].info.streaming);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            json!({"type":"entered","room":{"id":2,"name":"Destino"}})
+        );
+    }
+    #[test]
     fn master_password_opens_private_rooms_without_bypassing_capacity_or_isolation() {
         let mut rooms = Room::default();
         let password = "test-owner-password";
@@ -743,8 +784,10 @@ mod tests {
             &mut hash,
         );
         rooms.master_password = Some(RoomPassword { salt, hash });
+        let mut receivers = Vec::new();
         for id in 1..=9 {
-            let (tx, _rx) = mpsc::channel(64);
+            let (tx, rx) = mpsc::channel(64);
+            receivers.push(rx);
             rooms.peers.insert(
                 id,
                 Peer {
@@ -810,8 +853,10 @@ mod tests {
     #[test]
     fn open_rooms_accept_empty_password_without_weakening_private_rooms() {
         let mut rooms = Room::default();
+        let mut receivers = Vec::new();
         for id in 1..=2 {
-            let (tx, _rx) = mpsc::channel(64);
+            let (tx, rx) = mpsc::channel(64);
+            receivers.push(rx);
             rooms.peers.insert(
                 id,
                 Peer {
@@ -857,8 +902,10 @@ mod tests {
     #[test]
     fn private_rooms_require_password_and_isolate_signals() {
         let mut rooms = Room::default();
+        let mut receivers = Vec::new();
         for id in 1..=3 {
-            let (tx, _rx) = mpsc::channel(64);
+            let (tx, rx) = mpsc::channel(64);
+            receivers.push(rx);
             rooms.peers.insert(
                 id,
                 Peer {

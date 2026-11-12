@@ -15,7 +15,7 @@ fn choose_from(window: &gtk::ApplicationWindow, sources: &[(u64, String)]) -> Op
         gtk::DialogFlags::MODAL,
         &[
             ("Cancelar", gtk::ResponseType::Cancel),
-            ("Transmitir", gtk::ResponseType::Accept),
+            ("Compartilhar", gtk::ResponseType::Accept),
         ],
     );
     dialog.set_resizable(false);
@@ -25,6 +25,34 @@ fn choose_from(window: &gtk::ApplicationWindow, sources: &[(u64, String)]) -> Op
     content.set_margin_bottom(16);
     content.set_margin_start(16);
     content.set_margin_end(16);
+    content.pack_start(
+        &super::ui::label("O que você quer compartilhar?", "room-title"),
+        false,
+        false,
+        0,
+    );
+    let hint = super::ui::label(
+        "Escolha uma tela ou janela. Só a fonte selecionada será transmitida.",
+        "muted",
+    );
+    hint.set_line_wrap(true);
+    hint.set_max_width_chars(60);
+    content.pack_start(&hint, false, false, 0);
+    if let Some(button) = dialog.widget_for_response(gtk::ResponseType::Accept) {
+        button.style_context().add_class("primary");
+    }
+    if sources.is_empty() {
+        content.pack_start(
+            &super::ui::label(
+                "Nenhuma fonte disponível. Abra uma janela e tente novamente.",
+                "empty-description",
+            ),
+            false,
+            false,
+            0,
+        );
+    }
+
     let stack = gtk::Stack::new();
     let selected = Rc::new(Cell::new(sources.first().map(|s| s.0)));
     let mut group = None::<gtk::RadioButton>;

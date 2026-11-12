@@ -1,6 +1,6 @@
 use super::icons::{self, Icon};
 use super::{Command, Commands, Person};
-use gtk::{Orientation, gdk, prelude::*};
+use gtk::{Orientation, atk::prelude::*, gdk, prelude::*};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -12,11 +12,39 @@ fn hide_due(fullscreen: bool, idle: Duration, interacting: bool) -> bool {
     fullscreen && !interacting && idle >= Duration::from_secs(3)
 }
 
+fn fullscreen_target(
+    parent: &gtk::ApplicationWindow,
+) -> Option<(gdk::Screen, i32, gdk::Rectangle)> {
+    let window = parent.window()?;
+    let display = window.display();
+    let monitor = display.monitor_at_window(&window)?;
+    let index = (0..display.n_monitors())
+        .find(|index| display.monitor(*index).as_ref() == Some(&monitor))?;
+    Some((window.screen(), index, monitor.geometry()))
+}
+
+fn fullscreen_at_parent(full: &gtk::Window, parent: Option<&gtk::ApplicationWindow>) {
+    if let Some((screen, monitor, bounds)) = parent.and_then(fullscreen_target) {
+        full.set_screen(&screen);
+        // Initial placement also helps Windows/X11 managers before the new window is mapped.
+        full.move_(bounds.x(), bounds.y());
+        full.fullscreen_on_monitor(&screen, monitor);
+        super::diagnostics::event!(
+            "fullscreen-target",
+            serde_json::json!({"monitor":monitor,"x":bounds.x(),"y":bounds.y(),"width":bounds.width(),"height":bounds.height()})
+        );
+    } else {
+        full.fullscreen();
+    }
+}
+
 struct Tile {
     slot: gtk::Box,
     content: gtk::Box,
     title: gtk::Label,
     expand: gtk::Button,
+    sizing: gtk::Button,
+    fill: Rc<Cell<bool>>,
     fullscreen: RefCell<Option<gtk::Window>>,
     controls: gtk::Revealer,
     last_activity: Cell<Instant>,
@@ -40,6 +68,8 @@ impl Tile {
                 timer.remove();
             }
             self.controls.set_reveal_child(true);
+            self.fill.set(false);
+            self.sizing.hide();
             self.hovered.set(false);
             self.slot.show_all();
             window.unfullscreen();
@@ -60,16 +90,30 @@ impl Tile {
         area.set_size_request(240, 135);
         area.set_hexpand(true);
         area.set_vexpand(true);
+        if let Some(accessible) = area.accessible() {
+            accessible.set_name(&format!("Vídeo da transmissão de {title}"));
+        }
+        let overlay = gtk::Overlay::new();
+        overlay.add(&area);
+        let connecting = super::ui::label("Conectando à transmissão…", "muted");
+        connecting.set_halign(gtk::Align::Center);
+        connecting.set_valign(gtk::Align::Center);
+        connecting.set_no_show_all(true);
+        overlay.add_overlay(&connecting);
+        connecting.show();
         let frame = Rc::new(RefCell::new(None::<super::video::Frame>));
         let current = frame.clone();
+        let fill = Rc::new(Cell::new(false));
+        let fill_drawing = fill.clone();
         area.connect_draw(move |area, cr| {
-            cr.set_source_rgb(0.078, 0.09, 0.11);
+            cr.set_source_rgb(0., 0., 0.);
             let _ = cr.paint();
             if let Some(image) = current.borrow().as_ref() {
                 let _ = image.paint(
                     cr,
                     area.allocated_width() as f64,
                     area.allocated_height() as f64,
+                    fill_drawing.get(),
                 );
             }
             gtk::glib::Propagation::Proceed
@@ -80,12 +124,11 @@ impl Tile {
                 && let Some(image) = super::video::Frame::new(&sample)
             {
                 *frame.borrow_mut() = Some(image);
+                connecting.hide();
                 area.queue_draw();
             }
             gtk::glib::ControlFlow::Continue
         });
-        let overlay = gtk::Overlay::new();
-        overlay.add(&area);
         content.pack_start(&overlay, true, true, 0);
         let bar = gtk::Box::new(Orientation::Horizontal, 8);
         bar.style_context().add_class("video-toolbar");
@@ -99,6 +142,9 @@ impl Tile {
         volume.set_draw_value(false);
         volume.set_size_request(110, -1);
         volume.set_tooltip_text(Some("Volume desta transmissão (0 silencia)"));
+        if let Some(accessible) = volume.accessible() {
+            accessible.set_name(&format!("Volume da transmissão de {}", title.text()));
+        }
         let commands = tx.clone();
         let errors = error.clone();
         volume.connect_value_changed(move |scale| {
@@ -112,6 +158,26 @@ impl Tile {
         sound.pack_start(&icons::image(Icon::Volume), false, false, 0);
         sound.pack_start(&volume, false, false, 0);
         bar.pack_start(&sound, false, false, 0);
+        let sizing = gtk::Button::with_label("Ver conteúdo inteiro");
+        sizing.set_no_show_all(true);
+        sizing.set_tooltip_text(Some(
+            "Alterna entre preencher a tela com corte e mostrar a imagem inteira sem deformação.",
+        ));
+        let fit_mode = fill.clone();
+        let repaint = area.downgrade();
+        sizing.connect_clicked(move |button| {
+            let filled = !fit_mode.get();
+            fit_mode.set(filled);
+            button.set_label(if filled {
+                "Ver conteúdo inteiro"
+            } else {
+                "Preencher tela"
+            });
+            if let Some(area) = repaint.upgrade() {
+                area.queue_draw();
+            }
+        });
+        bar.pack_start(&sizing, false, false, 0);
         let expand = icons::button(Icon::Expand, "Tela cheia (duplo clique)");
         expand.set_tooltip_text(Some("Ampliar este vídeo; Escape para voltar"));
         bar.pack_start(&expand, false, false, 0);
@@ -136,12 +202,15 @@ impl Tile {
         controls.set_reveal_child(true);
         overlay.add_overlay(&controls);
         let slot = gtk::Box::new(Orientation::Vertical, 0);
+        slot.style_context().add_class("video-slot");
         slot.pack_start(&content, true, true, 0);
         let tile = Rc::new(Self {
             slot,
             content,
             title,
             expand,
+            sizing,
+            fill,
             fullscreen: RefCell::new(None),
             controls,
             last_activity: Cell::new(Instant::now()),
@@ -164,12 +233,17 @@ impl Tile {
             }
             let full = gtk::Window::new(gtk::WindowType::Toplevel);
             full.set_title(&tile.title.text());
-            if let Some(parent) = parent.upgrade() {
-                full.set_transient_for(Some(&parent));
+            let parent = parent.upgrade();
+            if let Some(parent) = &parent {
+                full.set_transient_for(Some(parent));
                 full.set_application(parent.application().as_ref());
             }
             full.set_destroy_with_parent(true);
             full.set_decorated(false);
+            full.style_context().add_class("fullscreen-window");
+            tile.fill.set(true);
+            tile.sizing.set_label("Ver conteúdo inteiro");
+            tile.sizing.show();
             tile.slot.remove(&tile.content);
             full.add(&tile.content);
             icons::set(
@@ -201,7 +275,7 @@ impl Tile {
                 }
             });
             *tile.fullscreen.borrow_mut() = Some(full.clone());
-            full.fullscreen();
+            fullscreen_at_parent(&full, parent.as_ref());
             full.show_all();
             full.present();
             area_for_focus.grab_focus();
@@ -300,8 +374,40 @@ impl Drop for Tile {
 pub struct Stage {
     pub grid: gtk::Grid,
     tiles: HashMap<u64, Rc<Tile>>,
-    empty: gtk::Label,
+    empty: gtk::Box,
+    empty_title: gtk::Label,
+    empty_hint: gtk::Label,
+    pub share: gtk::Button,
+    columns: Rc<Cell<usize>>,
 }
+
+fn layout(grid: &gtk::Grid, columns: &Cell<usize>) {
+    let mut slots = grid
+        .children()
+        .into_iter()
+        .filter(|child| child.style_context().has_class("video-slot"))
+        .collect::<Vec<_>>();
+    let next = if slots.len() > 1 && grid.allocated_width() >= 900 {
+        2
+    } else {
+        1
+    };
+    if next == columns.get() {
+        return;
+    }
+    slots.sort_by_key(|slot| {
+        (
+            grid.child_property::<i32>(slot, "top-attach"),
+            grid.child_property::<i32>(slot, "left-attach"),
+        )
+    });
+    columns.set(next);
+    for (index, slot) in slots.iter().enumerate() {
+        grid.child_set_property(slot, "left-attach", &((index % next) as i32));
+        grid.child_set_property(slot, "top-attach", &((index / next) as i32));
+    }
+}
+
 impl Stage {
     pub fn new() -> Self {
         let grid = gtk::Grid::new();
@@ -311,15 +417,61 @@ impl Stage {
         grid.set_column_homogeneous(true);
         grid.set_hexpand(true);
         grid.set_vexpand(true);
-        let empty = super::ui::label("Nenhuma transmissão aberta", "empty-title");
+        let empty = gtk::Box::new(Orientation::Vertical, 12);
+        empty.style_context().add_class("empty-state");
         empty.set_halign(gtk::Align::Center);
         empty.set_valign(gtk::Align::Center);
+        let symbol = icons::image(Icon::Cast);
+        symbol.set_size_request(48, 48);
+        symbol.set_halign(gtk::Align::Center);
+        symbol.style_context().add_class("empty-symbol");
+        let empty_title = super::ui::label("Uma sala, várias telas", "empty-title");
+        empty_title.set_xalign(0.5);
+        let empty_hint = super::ui::label(
+            "Compartilhe sua tela ou escolha alguém ao vivo na lateral para assistir.",
+            "empty-description",
+        );
+        empty_hint.set_xalign(0.5);
+        empty_hint.set_justify(gtk::Justification::Center);
+        empty_hint.set_line_wrap(true);
+        empty_hint.set_max_width_chars(42);
+        let share = gtk::Button::new();
+        icons::set(&share, Icon::Cast, "Compartilhar minha tela", true);
+        share.style_context().add_class("primary");
+        share.set_halign(gtk::Align::Center);
+        empty.pack_start(&symbol, false, false, 0);
+        empty.pack_start(&empty_title, false, false, 0);
+        empty.pack_start(&empty_hint, false, false, 0);
+        empty.pack_start(&share, false, false, 4);
+        empty.show_all();
+        share.set_no_show_all(true);
+        empty.set_no_show_all(true);
         grid.attach(&empty, 0, 0, 1, 1);
+        let columns = Rc::new(Cell::new(1));
+        let allocated_columns = columns.clone();
+        grid.connect_size_allocate(move |grid, _| layout(grid, &allocated_columns));
         Self {
             grid,
             tiles: HashMap::new(),
             empty,
+            empty_title,
+            empty_hint,
+            share,
+            columns,
         }
+    }
+    pub fn set_streaming(&self, active: bool) {
+        self.empty_title.set_text(if active {
+            "Sua tela já está ao vivo"
+        } else {
+            "Transmita ou assista"
+        });
+        self.empty_hint.set_text(if active {
+            "Continue compartilhando. Para assistir a outra tela, escolha alguém ao vivo na lateral."
+        } else {
+            "Compartilhe sua tela ou escolha alguém ao vivo na lateral para assistir."
+        });
+        self.share.set_visible(!active);
     }
     pub fn update(
         &mut self,
@@ -337,11 +489,7 @@ impl Stage {
                 false
             }
         });
-        let columns = if watching.len() > 1 && self.grid.allocated_width() >= 900 {
-            2
-        } else {
-            1
-        };
+        let columns = self.columns.get();
         for (index, id) in watching.iter().enumerate() {
             let name = people
                 .iter()
@@ -359,6 +507,7 @@ impl Stage {
             self.grid
                 .child_set_property(&tile.slot, "top-attach", &((index / columns) as i32));
         }
+        layout(&self.grid, &self.columns);
         self.grid.show_all();
         self.empty.set_visible(watching.is_empty());
     }
@@ -382,8 +531,15 @@ mod tests {
         app.register(None::<&gtk::gio::Cancellable>).unwrap();
         let window = gtk::ApplicationWindow::new(&app);
         super::super::ui::check_participant_layout(&window);
+        super::super::rooms_ui::check_lobby(&window);
+        super::super::ui::check_persistence_fallback();
         super::super::source_picker::check_picker(&window);
         let mut stage = Stage::new();
+        stage.set_streaming(true);
+        stage.grid.show_all();
+        assert!(!stage.share.is_visible());
+        stage.set_streaming(false);
+        assert!(stage.share.is_visible());
         window.add(&stage.grid);
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
         let error = gtk::Label::new(None);
@@ -396,8 +552,37 @@ mod tests {
         let tile = stage.tiles[&2].clone();
         stage.update(&[2], &people, &window, &tx, &error);
         assert!(Rc::ptr_eq(&tile, &stage.tiles[&2]));
+        stage.update(&[2, 3], &people, &window, &tx, &error);
+        window.show();
+        for (width, columns) in [(1100, 2), (800, 1), (1100, 2)] {
+            stage
+                .grid
+                .size_allocate(&gdk::Rectangle::new(0, 0, width, 600));
+            assert_eq!(stage.columns.get(), columns);
+            assert_eq!(
+                stage
+                    .grid
+                    .child_property::<i32>(&stage.tiles[&3].slot, "left-attach"),
+                if columns == 2 { 1 } else { 0 }
+            );
+            assert_eq!(
+                stage
+                    .grid
+                    .child_property::<i32>(&stage.tiles[&3].slot, "top-attach"),
+                if columns == 2 { 0 } else { 1 }
+            );
+            assert!(Rc::ptr_eq(&tile, &stage.tiles[&2]));
+        }
+        let (_, origin_monitor, _) =
+            fullscreen_target(&window).expect("mapped parent has a monitor");
+        assert!((0..window.display().n_monitors()).contains(&origin_monitor));
         tile.expand.emit_clicked();
         assert!(tile.fullscreen.borrow().is_some());
+        assert!(tile.fill.get());
+        tile.sizing.emit_clicked();
+        assert!(!tile.fill.get());
+        tile.sizing.emit_clicked();
+        assert!(tile.fill.get());
         if let Some(timer) = tile.timer.borrow_mut().take() {
             timer.remove();
         }
@@ -412,6 +597,8 @@ mod tests {
             gtk::main_iteration();
         }
         assert!(tile.fullscreen.borrow().is_none());
+        assert!(!tile.fill.get());
+        assert!(!tile.sizing.is_visible());
         for _ in 0..3 {
             tile.expand.emit_clicked();
             assert!(tile.fullscreen.borrow().is_some());

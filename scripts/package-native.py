@@ -13,7 +13,7 @@ import zipfile
 PLUGINS = (
     "coreelements videotestsrc audiotestsrc app autodetect playback typefindfunctions videoconvertscale videoconvert videoscale "
     "videorate ximagesrc pipewire pulseaudio opus rtp rtpmanager webrtc dtls srtp nice "
-    "videoparsersbad openh264 va vaapi nvcodec x264 qsv amfcodec mediafoundation "
+    "videoparsersbad openh264 libav va vaapi nvcodec x264 qsv amfcodec mediafoundation "
     "d3d11 d3d12 wasapi wasapi2 directsound audioconvert audioresample "
     "opengl ximagesink xvimagesink waylandsink alsa volume"
 ).split()
@@ -25,10 +25,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--prefix", type=Path)
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="preservar também um executável separado com logs e autotestes")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
     windows = sys.platform == "win32"
+    if windows and shutil.which("makensis") is None:
+        raise RuntimeError("Instale mingw-w64-ucrt-x86_64-nsis no MSYS2 UCRT64 para gerar o instalador.")
     prefix = args.prefix or Path(output("pkg-config", "--variable=prefix", "gstreamer-1.0"))
     libdir = Path(output("pkg-config", "--variable=libdir", "gstreamer-1.0"))
     plugin_dir = libdir / "gstreamer-1.0"
@@ -54,7 +58,7 @@ def main():
         candidates = list(plugin_dir.glob("*gst" + name + (".dll" if windows else ".so")))
         for p in candidates:
             add(p, "plugins/" + p.name)
-    for required in ["webrtc", "nice", "openh264", "opus", "app"]:
+    for required in ["webrtc", "nice", "openh264", "libav", "opus", "app"]:
         if not any(re.search(r"gst" + required + r"\.(so|dll)$", name) for name in files):
             raise RuntimeError(f"Plugin obrigatório ausente: {required}")
     scanners = [libdir / "gstreamer-1.0" / ("gst-plugin-scanner" + ext),
@@ -119,9 +123,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="janja-check-") as temporary:
         check_env = dict(os.environ)
         check_env["LOCALAPPDATA" if windows else "XDG_CACHE_HOME"] = temporary
+        check_env["JANJA_LOG_DIR"] = str(Path(temporary) / "logs")
         subprocess.run([str(staged), "--check"], env=check_env, check=True, timeout=120)
         subprocess.run([str(staged), "--self-test"], env=check_env, check=True, timeout=120)
-    # Tests run on the verification build; only the clean build is distributed.
+    if args.diagnostics:
+        diagnostic = dist / ("janja-diagnostico-windows.exe" if windows else "janja-diagnostico-linux")
+        diagnostic_staged = diagnostic.with_name(diagnostic.stem + ".pending" + diagnostic.suffix)
+        shutil.copy2(staged, diagnostic_staged)
+    # Keep diagnostics separate from the application distributed to end users.
     for name in list(files):
         if "audiotestsrc" in name or (name.startswith("lib/spa-0.2/") and "videotestsrc" in name):
             del files[name]
@@ -143,6 +152,14 @@ def main():
     # Atomic replacement also works while the previous Linux executable is open.
     staged.replace(artifact)
     print(f"Gerado: {artifact} ({artifact.stat().st_size / 1024**2:.1f} MiB)")
+    if windows:
+        subprocess.run(["makensis", "/V3", "/WX", "/INPUTCHARSET", "UTF8", str(root / "scripts/installer-windows.nsi")], check=True)
+        installer = dist / "janja-setup-windows.exe"
+        (dist / "janja-setup-windows.pending.exe").replace(installer)
+        print(f"Instalador: {installer} ({installer.stat().st_size / 1024**2:.1f} MiB)")
+    if args.diagnostics:
+        diagnostic_staged.replace(diagnostic)
+        print(f"Diagnóstico opcional: {diagnostic} ({diagnostic.stat().st_size / 1024**2:.1f} MiB)")
     print("Teste este arquivo em outra máquina antes de distribuir.")
 
 if __name__ == "__main__":

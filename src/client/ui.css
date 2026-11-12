@@ -1,0 +1,78 @@
+* { font-family: "Segoe UI", "Noto Sans", sans-serif; font-size: 14px; color: #f2f3f7; text-shadow: none; }
+window, dialog { background: #262830; }
+.app-header { background: #17181e; border-bottom: 1px solid #343640; padding: 12px 20px; }
+.brand-name { font-size: 19px; font-weight: 700; }
+.title { font-size: 28px; font-weight: 700; }
+.muted { color: #b4b7c6; font-size: 12px; }
+.section-label { color: #b4b7c6; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+.sidebar { background: #202129; border-right: 1px solid #343640; padding: 20px 12px 12px; }
+.sidebar-note { background: #292b36; border-radius: 8px; padding: 12px; }
+.room-header { padding: 16px 20px; border-bottom: 1px solid #343640; }
+.room-title { font-size: 20px; font-weight: 700; }
+.profile-pill { background: #2b2d39; border-radius: 6px; padding: 8px 12px; color: #d6daf2; }
+.badge { background: #303241; border-radius: 5px; padding: 5px 9px; color: #cdd3ef; font-size: 12px; }
+.live-label { color: #8de0b6; font-size: 12px; font-weight: 600; }
+.stage-shell { background: #262830; }
+.stage-canvas { background: #111217; padding: 12px; }
+.stage-footer { padding: 8px 16px; background: #202129; border-top: 1px solid #343640; }
+.video-tile { background: #111217; border: 1px solid #454957; border-radius: 8px; }
+.video-toolbar { background: rgba(23, 24, 30, 0.96); padding: 8px 12px; border-radius: 6px; }
+.video-name { font-weight: 600; }
+.empty-state { padding: 24px; }
+.empty-symbol { color: #a7b3ff; font-size: 44px; font-weight: 600; }
+.empty-title { font-size: 23px; font-weight: 600; }
+.empty-description { color: #b4b7c6; font-size: 14px; }
+.dock { background: #1a1b22; border-top: 1px solid #3a3c47; padding: 16px 20px; }
+.dock-title { font-size: 15px; font-weight: 600; }
+.lobby { padding: 28px 40px; }
+.lobby-intro { margin-bottom: 12px; }
+.room-card { background: #30323e; border: 1px solid #454957; border-radius: 10px; padding: 18px; }
+.room-card .avatar { border-radius: 8px; background: #424965; }
+.person-card { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 8px; }
+.person-card:hover { background: #2c2e39; }
+.participants row { margin-bottom: 4px; }
+.person-card.watching { background: #30374e; border-color: #6675ab; }
+.avatar { background: #3b405b; color: #e1e5ff; border-radius: 18px; min-width: 36px; min-height: 36px; font-size: 17px; font-weight: 600; }
+.panel { background: #202129; border: 1px solid #454957; border-radius: 10px; padding: 16px; }
+button { background-image: none; background-color: #383b49; color: #f2f3f7; border: 1px solid #55596c; border-radius: 6px; padding: 9px 14px; box-shadow: none; }
+button:hover { background-color: #484d60; }
+button:active, button:checked { background-color: #535e83; }
+button:focus, entry:focus, scale:focus { border-color: #c2cbff; outline: 2px solid #c2cbff; outline-offset: 1px; }
+button:disabled, button:disabled label, button:disabled drawingarea { color: #9fa4b5; background-color: #2b2d37; border-color: #3c3f4c; }
+button.primary { background-color: #a7b3ff; border-color: #a7b3ff; font-weight: 700; }
+button.primary label, button.primary drawingarea { color: #1b2140; }
+button.primary:hover { background-color: #c1c9ff; }
+button.primary:disabled, button.primary:disabled label, button.primary:disabled drawingarea { background-color: #2b2d37; color: #9fa4b5; border-color: #3c3f4c; }
+button.stop { background-color: #a5354b; border-color: #e18596; }
+button.stop label, button.stop drawingarea { color: #ffffff; }
+button.stop:hover { background-color: #bc4058; }
+button.icon-button { min-width: 20px; min-height: 20px; padding: 9px; }
+button.quiet { background-color: transparent; border-color: transparent; }
+button.quiet:hover { background-color: #383b49; }
+.person-card button { padding: 6px 8px; }
+list, row { background: transparent; }
+row { padding: 0; }
+.error { color: #ffb4bd; padding: 10px 20px; background: #3c242e; }
+entry, spinbutton, spinbutton entry, combobox button { background: #191b23; color: #f2f3f7; border: 1px solid #60677e; border-radius: 6px; }
+entry { padding: 9px; caret-color: #ffffff; }
+entry selection, selection { background-color: #5266ae; color: #ffffff; }
+popover, menu, menuitem, tooltip { background: #242630; color: #f2f3f7; border-color: #60677e; }
+menuitem:hover, menuitem:selected { background: #424e75; }
+checkbutton { padding: 6px 0; }
+checkbutton check { background: #191b23; color: #ffffff; border: 1px solid #929bb7; border-radius: 4px; min-width: 16px; min-height: 16px; }
+checkbutton check:checked { background: #596cbd; }
+checkbutton:disabled, checkbutton:disabled label { color: #9fa4b5; }
+scale trough { background: #191b23; min-height: 4px; border-radius: 3px; }
+scale highlight { background: #a7b3ff; min-height: 4px; border-radius: 3px; }
+scale slider { background: #e4eaff; border: none; min-width: 12px; min-height: 12px; border-radius: 8px; box-shadow: none; }
+scrollbar, scrollbar trough { background: #202129; }
+scrollbar slider { background: #60677e; border-radius: 5px; min-width: 6px; }
+.source-choice { padding: 10px; border: 1px solid #454957; border-radius: 8px; background: #202129; }
+.source-choice:checked { background: #303c60; border-color: #a7b3ff; }
+.source-choice:hover { background: #30374e; }
+.source-choice:focus { outline: 2px solid #c2cbff; outline-offset: 1px; }
+.source-preview, .fullscreen-window { background: #000000; }
+.fullscreen-window .video-tile { border: none; border-radius: 0; background: #000000; }
+button.audience { background: transparent; border-color: transparent; }
+button.audience:hover { background: #303241; }
+button.audience.has-viewers label, button.audience.has-viewers drawingarea { color: #8de0b6; }

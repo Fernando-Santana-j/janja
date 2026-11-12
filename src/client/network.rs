@@ -52,6 +52,7 @@ pub fn start(events: Events, name: String) -> Commands {
             starting: false,
             selected_room: None,
             ice: None,
+            access: super::room_access::Access::start(events.clone()),
             tx: commands,
             events,
             outgoing,
@@ -92,7 +93,7 @@ async fn connect(tx: Commands, mut outgoing: async_mpsc::Receiver<(u64, Value)>,
             let config=WebSocketConfig::default().max_message_size(Some(65_536)).max_frame_size(Some(65_536));
             let (mut ws,_)=tokio::time::timeout(Duration::from_secs(15),connect_async_with_config(ENDPOINT,Some(config),false))
                 .await.map_err(|_| "Tempo esgotado na conexão".to_string())?.map_err(|e|e.to_string())?;
-            tx.try_send(Command::Connected(epoch)).map_err(|e|e.to_string())?;
+            send_command(&tx, Command::Connected(epoch)).await?;
             ws.send(Message::Text(json!({"type":"join","name":name,"protocol":2}).to_string().into())).await.map_err(|e|e.to_string())?;
             let mut heartbeat=tokio::time::interval(Duration::from_secs(15));
             let mut seen=tokio::time::Instant::now();
@@ -103,7 +104,7 @@ async fn connect(tx: Commands, mut outgoing: async_mpsc::Receiver<(u64, Value)>,
                         match message {
                             Some(Ok(Message::Text(text)))=>{
                                 let value:Value=serde_json::from_str(&text).map_err(|e|e.to_string())?;
-                                tx.try_send(Command::Server(epoch,value)).map_err(|e|e.to_string())?;
+                                send_command(&tx, Command::Server(epoch,value)).await?;
                                 delay=1;
                             }
                             Some(Ok(Message::Ping(bytes)))=>ws.send(Message::Pong(bytes)).await.map_err(|e|e.to_string())?,
@@ -131,13 +132,30 @@ async fn connect(tx: Commands, mut outgoing: async_mpsc::Receiver<(u64, Value)>,
         match result {
             Ok(()) => return,
             Err(e) => {
-                if tx.try_send(Command::Disconnected(epoch, e)).is_err() {
+                if send_command(&tx, Command::Disconnected(epoch, e))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
         }
         tokio::time::sleep(Duration::from_secs(delay)).await;
         delay = (delay * 2).min(15);
+    }
+}
+async fn send_command(tx: &Commands, mut command: Command) -> Result<(), String> {
+    loop {
+        match tx.try_send(command) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::TrySendError::Full(pending)) => {
+                command = pending;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err("Aplicativo encerrado".into());
+            }
+        }
     }
 }
 struct Engine {
@@ -153,6 +171,7 @@ struct Engine {
     starting: bool,
     selected_room: Option<u64>,
     ice: Option<Vec<String>>,
+    access: super::room_access::Access,
     tx: Commands,
     events: Events,
     outgoing: async_mpsc::Sender<(u64, Value)>,
@@ -164,6 +183,7 @@ impl Engine {
             .map_err(|_| "Fila de conexão cheia; tente novamente".into())
     }
     fn clear(&mut self) {
+        self.access.cancel();
         self.starting = false;
         self.capture_request += 1;
         self.capture = None;
@@ -173,6 +193,7 @@ impl Engine {
         self.selected_room = None;
         self.ice = None;
         let _ = self.events.send(Event::SelectedRoom(None));
+        let _ = self.events.send(Event::Viewers(vec![]));
         let _ = self.events.send(Event::Rooms(vec![]));
         self.people.clear();
         let _ = self.events.send(Event::Streaming(false));
@@ -199,6 +220,7 @@ impl Engine {
             self.peers.retain(|(_, stream), _| *stream != id);
         }
         let _ = self.events.send(Event::Streaming(false));
+        let _ = self.events.send(Event::Viewers(vec![]));
         self.send(json!({"type":"state","streaming":false}))
     }
     fn handle(&mut self, command: Command) -> Result<(), String> {
@@ -217,7 +239,10 @@ impl Engine {
                 {
                     return Err("Informe um nome válido. A senha é opcional; se preenchida, use 8–128 bytes.".into());
                 }
+                self.access.idle()?;
                 self.send(json!({"type":"createRoom","name":name.trim(),"password":password}))?;
+                self.access
+                    .submitted(self.epoch, None, Some(name.trim().into()), password);
             }
             Command::EnterRoom(room, password) => {
                 if self.id.is_none() {
@@ -229,9 +254,48 @@ impl Engine {
                 if password.len() > 128 {
                     return Err("Senha inválida".into());
                 }
+                self.access.idle()?;
                 self.send(json!({"type":"enterRoom","room":room,"password":password}))?;
+                let name = self.access.room(room).map(|room| room.name);
+                self.access
+                    .submitted(self.epoch, Some(room), name, password);
+            }
+            Command::RequestRoom(room) => {
+                if self.id.is_none() {
+                    return Err("Aguarde a conexão".into());
+                }
+                if self.selected_room.is_some() {
+                    return Err("Saia da sala atual primeiro".into());
+                }
+                let current = self
+                    .access
+                    .room(room.id)
+                    .filter(|current| current.name == room.name)
+                    .ok_or("Sala indisponível")?;
+                if let Some(password) = self.access.begin(self.epoch, current.clone())? {
+                    self.enter_room(current, password)?;
+                }
+            }
+            Command::RoomPassword(epoch, request, room, password)
+                if epoch == self.epoch && self.access.current(epoch, request, &room) =>
+            {
+                if !(8..=128).contains(&password.len()) {
+                    return Err("Use uma senha de 8–128 bytes.".into());
+                }
+                self.enter_room(room, password)?;
+            }
+            Command::CancelRoomLookup => {
+                if self.id.is_some() {
+                    self.access.cancel_lookup();
+                } else {
+                    self.access.cancel();
+                }
+            }
+            Command::CancelRoomRequest(epoch, request) => {
+                self.access.cancel_request(epoch, request)
             }
             Command::LeaveRoom => {
+                self.access.cancel();
                 self.stop()?;
                 self.peers.clear();
                 self.watching.clear();
@@ -272,7 +336,7 @@ impl Engine {
                 let epoch = self.epoch;
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
-                    let result = Capture::new(&settings);
+                    let result = Capture::new(&settings).map(Box::new);
                     let _ = tx.send(Command::Captured(epoch, request, settings, result));
                 });
             }
@@ -302,7 +366,7 @@ impl Engine {
                             settings.fps,
                             settings.bitrate as f64 / 1000.0
                         )));
-                        self.capture = Some(capture);
+                        self.capture = Some(*capture);
                     }
                     Err(e) => {
                         let _ = self.events.send(Event::Streaming(false));
@@ -414,6 +478,16 @@ impl Engine {
         }
         Ok(())
     }
+    fn enter_room(&mut self, room: RoomInfo, password: String) -> Result<(), String> {
+        if self.id.is_none() || self.selected_room.is_some() {
+            return Err("Selecione uma sala disponível após conectar.".into());
+        }
+        self.access.idle()?;
+        self.send(json!({"type":"enterRoom","room":room.id,"password":password}))?;
+        self.access
+            .submitted(self.epoch, Some(room.id), Some(room.name), password);
+        Ok(())
+    }
     fn server(&mut self, v: Value) -> Result<(), String> {
         match v["type"].as_str() {
             Some("rooms") => {
@@ -422,6 +496,7 @@ impl Engine {
                 if rooms.len() > 32
                     || rooms.iter().any(|r| {
                         r.id == 0
+                            || r.name.trim().is_empty()
                             || r.name.chars().count() > 32
                             || r.name.chars().any(char::is_control)
                             || r.members > 8
@@ -429,11 +504,21 @@ impl Engine {
                 {
                     return Err("Lista de salas inválida".into());
                 }
+                self.access.update_rooms(self.epoch, &rooms);
                 let _ = self.events.send(Event::Rooms(rooms));
             }
             Some("entered") => {
                 let room: Option<RoomInfo> =
                     serde_json::from_value(v["room"].clone()).map_err(|e| e.to_string())?;
+                if room.as_ref().is_some_and(|room| {
+                    room.id == 0
+                        || room.name.trim().is_empty()
+                        || room.name.chars().count() > 32
+                        || room.name.chars().any(char::is_control)
+                }) {
+                    return Err("Confirmação de sala inválida".into());
+                }
+                self.access.accepted(self.epoch, room.as_ref())?;
                 self.starting = false;
                 self.capture_request += 1;
                 self.capture = None;
@@ -584,15 +669,28 @@ impl Engine {
                 }
             }
             Some("error") => {
-                return Err(v["message"].as_str().unwrap_or("Erro no servidor").into());
+                let message = v["message"].as_str().unwrap_or("Erro no servidor");
+                if !self.access.error(self.epoch, message) {
+                    return Err(message.into());
+                }
             }
             _ => return Err("Resposta inesperada do servidor".into()),
         }
         Ok(())
     }
     fn poll(&mut self) {
+        if let Some((room, password)) = self.access.poll(self.epoch)
+            && let Err(error) = self.enter_room(room, password)
+        {
+            let _ = self.events.send(Event::Error(error));
+        }
         if self.media_tick.elapsed() >= Duration::from_secs(2) {
-            if let Some(capture) = &self.capture {
+            let mut status = String::new();
+            let network_pressure = self
+                .peers
+                .iter()
+                .any(|((_, stream), p)| Some(*stream) == self.id && p.congested());
+            if let Some(capture) = &mut self.capture {
                 let frames = capture.frames.load(std::sync::atomic::Ordering::Relaxed);
                 let fps = frames.saturating_sub(self.last_frames) as f64
                     / self.media_tick.elapsed().as_secs_f64();
@@ -623,14 +721,67 @@ impl Engine {
                     .keys()
                     .filter(|(_, stream)| Some(*stream) == self.id)
                     .count();
-                let _ = self.events.send(Event::MediaStatus(format!(
-                    "Captura {raw_fps:.0} / encoder {fps:.0} FPS / {mbps:.1} Mbps / {viewers} assistindo / {}",
-                    capture.encoder
-                )));
+                let adjustment = match capture.adapt(
+                    self.media_tick.elapsed(),
+                    raw_fps,
+                    fps,
+                    network_pressure,
+                ) {
+                    Ok(reason) => reason,
+                    Err(error) => {
+                        capture.settings.adaptive = false;
+                        let _ = self.events.send(Event::Error(format!(
+                            "Ajuste automático desativado: {error}"
+                        )));
+                        None
+                    }
+                };
+                status = format!(
+                    "{}p / até {} FPS / encoder {fps:.0} FPS / {mbps:.1} Mbps por espectador / {viewers} assistindo / {} / áudio: {}{}",
+                    capture.settings.height,
+                    capture.settings.fps,
+                    capture.encoder,
+                    capture.audio_status(),
+                    adjustment
+                        .map(|reason| format!(" / qualidade reduzida: {reason}"))
+                        .unwrap_or_default(),
+                );
                 self.last_frames = frames;
             }
+            let viewers = self
+                .peers
+                .iter()
+                .filter_map(|((id, stream), peer)| {
+                    (Some(*stream) == self.id && peer.connected()).then_some(*id)
+                })
+                .collect();
+            let _ = self.events.send(Event::Viewers(viewers));
             for peer in self.peers.values() {
+                peer.tune_latency(self.media_tick.elapsed());
                 peer.log_stats();
+            }
+            let received: Vec<_> = self
+                .peers
+                .iter()
+                .filter(|((to, stream), _)| to == stream)
+                .map(|((to, _), peer)| {
+                    let name = self
+                        .people
+                        .iter()
+                        .find(|p| p.id == *to)
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("Participante");
+                    format!("{name}: {}", peer.audio_status())
+                })
+                .collect();
+            if !received.is_empty() {
+                if !status.is_empty() {
+                    status.push_str(" / ");
+                }
+                status.push_str(&format!("Áudio recebido — {}", received.join(", ")));
+            }
+            if !status.is_empty() {
+                let _ = self.events.send(Event::MediaStatus(status));
             }
             self.media_tick = std::time::Instant::now();
         }
@@ -662,6 +813,29 @@ impl Engine {
 mod tests {
     use super::*;
     use gst::prelude::*;
+    #[tokio::test]
+    async fn full_engine_queue_preserves_connection_events_until_capacity_returns() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        assert!(tx.try_send(Command::Connected(1)).is_ok());
+        let pending = send_command(&tx, Command::Disconnected(1, "reconnect".into()));
+        tokio::pin!(pending);
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        assert!(matches!(rx.try_recv(), Ok(Command::Connected(1))));
+        tokio::time::timeout(Duration::from_secs(1), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Command::Disconnected(1, error)) if error == "reconnect"
+        ));
+    }
+    #[tokio::test]
+    async fn closed_engine_queue_stops_forwarding() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+        assert!(send_command(&tx, Command::Connected(1)).await.is_err());
+    }
     fn engine() -> Engine {
         #[allow(deprecated)]
         let (events, _receive) = gtk::glib::MainContext::channel(gtk::glib::Priority::DEFAULT);
@@ -680,9 +854,59 @@ mod tests {
             starting: false,
             selected_room: Some(0),
             ice: None,
+            access: super::super::room_access::Access::without_store(events.clone()),
             tx,
             events,
             outgoing,
+        }
+    }
+    #[test]
+    fn receive_only_audio_status_reports_mute_without_erasing_idle_messages() {
+        gst::init().unwrap();
+        let context = gtk::glib::MainContext::new();
+        #[allow(deprecated)]
+        let (events, receive) = gtk::glib::MainContext::channel(gtk::glib::Priority::DEFAULT);
+        let received = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let output = received.clone();
+        receive.attach(Some(&context), move |event| {
+            if let Event::MediaStatus(text) = event {
+                output.borrow_mut().push(text);
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+        let mut e = engine();
+        e.events = events;
+        e.people = vec![Person {
+            id: 7,
+            name: "Teste".into(),
+            streaming: true,
+        }];
+        let peer = Peer::new(2, 7, 7, false, true, e.tx.clone()).unwrap();
+        peer.set_volume(0).unwrap();
+        e.peers.insert((7, 7), peer);
+        e.media_tick = std::time::Instant::now() - Duration::from_secs(3);
+        e.poll();
+        while context.pending() {
+            context.iteration(false);
+        }
+        assert_eq!(
+            received.borrow().as_slice(),
+            ["Áudio recebido — Teste: silenciado"]
+        );
+        e.peers.clear();
+        e.media_tick = std::time::Instant::now() - Duration::from_secs(3);
+        e.poll();
+        while context.pending() {
+            context.iteration(false);
+        }
+        assert_eq!(
+            received.borrow().len(),
+            1,
+            "Idle polling erased a calibration message"
+        );
+        drop(e);
+        while context.pending() {
+            context.iteration(false);
         }
     }
     #[test]
@@ -823,6 +1047,7 @@ mod tests {
             receive.try_recv().unwrap().1,
             json!({"type":"createRoom","name":"Aberta","password":""})
         );
+        e.access.cancel();
         assert!(
             e.handle(Command::CreateRoom("Privada".into(), "curta".into()))
                 .is_err()
@@ -836,6 +1061,109 @@ mod tests {
             receive.try_recv().unwrap().1,
             json!({"type":"enterRoom","room":2,"password":""})
         );
+    }
+    #[test]
+    fn room_password_flow_ignores_stale_dialogs_and_reuses_only_accepted_passwords() {
+        let mut e = engine();
+        e.id = Some(1);
+        e.selected_room = None;
+        let context = gtk::glib::MainContext::new();
+        #[allow(deprecated)]
+        let (events, receive) = gtk::glib::MainContext::channel(gtk::glib::Priority::DEFAULT);
+        let received = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let output = received.clone();
+        receive.attach(Some(&context), move |event| {
+            output.borrow_mut().push(event);
+            gtk::glib::ControlFlow::Continue
+        });
+        e.events = events.clone();
+        e.access = super::super::room_access::Access::without_store(events);
+        let (outgoing, mut wire) = async_mpsc::channel(16);
+        e.outgoing = outgoing;
+        e.server(
+            json!({"type":"rooms","rooms":[{"id":7,"name":"Amigos","locked":true,"members":1}]}),
+        )
+        .unwrap();
+        let room = e.access.room(7).unwrap();
+        e.handle(Command::RequestRoom(room.clone())).unwrap();
+        while context.pending() {
+            context.iteration(false);
+        }
+        let request = received
+            .borrow()
+            .iter()
+            .find_map(|event| match event {
+                Event::PasswordRequired(epoch, request, _) => Some((*epoch, *request)),
+                _ => None,
+            })
+            .unwrap();
+        for (epoch, token) in [(request.0 - 1, request.1), (request.0, request.1 + 1)] {
+            e.handle(Command::RoomPassword(
+                epoch,
+                token,
+                room.clone(),
+                "senha-recente".into(),
+            ))
+            .unwrap();
+            assert!(wire.try_recv().is_err());
+        }
+        e.handle(Command::RoomPassword(
+            request.0,
+            request.1,
+            room.clone(),
+            "senha-recente".into(),
+        ))
+        .unwrap();
+        assert_eq!(wire.try_recv().unwrap().1["password"], "senha-recente");
+        assert!(
+            e.handle(Command::CreateRoom("Outra".into(), String::new()))
+                .is_err(),
+            "Only one wire attempt at a time"
+        );
+        e.server(json!({"type":"error","message":"Senha incorreta."}))
+            .unwrap();
+        assert!(
+            wire.try_recv().is_err(),
+            "Wrong password must not retry automatically"
+        );
+        while context.pending() {
+            context.iteration(false);
+        }
+        let retry = received
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                Event::PasswordRequired(epoch, request, _) => Some((*epoch, *request)),
+                _ => None,
+            })
+            .unwrap();
+        e.handle(Command::RoomPassword(
+            request.0,
+            request.1,
+            room.clone(),
+            "senha-recente".into(),
+        ))
+        .unwrap();
+        assert!(wire.try_recv().is_err());
+        e.handle(Command::RoomPassword(
+            retry.0,
+            retry.1,
+            room.clone(),
+            "senha-correta".into(),
+        ))
+        .unwrap();
+        assert_eq!(wire.try_recv().unwrap().1["password"], "senha-correta");
+        e.server(json!({"type":"entered","room":{"id":7,"name":"Amigos"}}))
+            .unwrap();
+        e.server(json!({"type":"entered","room":null})).unwrap();
+        e.handle(Command::RequestRoom(room)).unwrap();
+        assert_eq!(wire.try_recv().unwrap().1["password"], "senha-correta");
+        while context.pending() {
+            context.iteration(false);
+        }
+        let debug = format!("{:?}", received.borrow());
+        assert!(!debug.contains("senha-recente") && !debug.contains("senha-correta"));
     }
     #[test]
     fn multiple_subscriptions_close_independently() {

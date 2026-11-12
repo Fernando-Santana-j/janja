@@ -1,13 +1,20 @@
+mod adaptive;
+mod audience;
+mod credentials;
 pub mod diagnostics;
 mod icons;
 pub mod media;
 pub mod network;
+mod playback;
 #[cfg(target_os = "linux")]
 pub mod portal;
 mod preferences;
 pub mod profile;
+mod room_access;
 mod rooms_ui;
 pub mod rtc;
+#[cfg(any(windows, test))]
+mod screensaver;
 mod source_picker;
 pub mod sources;
 mod stage;
@@ -25,6 +32,7 @@ pub struct Settings {
     pub bitrate: u32,
     pub audio: bool,
     pub exclude_discord: bool,
+    pub adaptive: bool,
     #[serde(skip)]
     pub source: u64,
 }
@@ -35,7 +43,8 @@ impl Default for Settings {
             height: 1080,
             bitrate: 8000,
             audio: true,
-            exclude_discord: false,
+            exclude_discord: cfg!(windows),
+            adaptive: false,
             source: 0,
         }
     }
@@ -69,10 +78,14 @@ pub struct RoomInfo {
 pub enum Command {
     CreateRoom(String, String),
     EnterRoom(u64, String),
+    RequestRoom(RoomInfo),
+    RoomPassword(u64, u64, RoomInfo, String),
+    CancelRoomLookup,
+    CancelRoomRequest(u64, u64),
     LeaveRoom,
     ListRooms,
     Start(Settings),
-    Captured(u64, u64, Settings, Result<media::Capture, String>),
+    Captured(u64, u64, Settings, Result<Box<media::Capture>, String>),
     Stop,
     Volume(u64, u8),
     Watch(u64),
@@ -89,11 +102,14 @@ pub enum Command {
 pub enum Event {
     Rooms(Vec<RoomInfo>),
     SelectedRoom(Option<RoomInfo>),
+    PasswordRequired(u64, u64, RoomInfo),
     Status(String),
     Room(u64, Vec<Person>),
     Streaming(bool),
     Watching(Vec<u64>),
+    Viewers(Vec<u64>),
     Error(String),
+    PlaybackError(String),
     CaptureInfo(String),
     MediaStatus(String),
     Recommendation(Result<(Settings, String), String>),
@@ -108,6 +124,9 @@ mod tests {
     #[test]
     fn settings_limits() {
         assert!(Settings::default().validate().is_ok());
+        let migrated: Settings =
+            serde_json::from_str(r#"{"fps":30,"height":1080,"bitrate":8000}"#).unwrap();
+        assert!(!migrated.adaptive, "automatic adjustment must be opt-in");
         let s = Settings {
             fps: 1000,
             ..Settings::default()

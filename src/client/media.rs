@@ -1,4 +1,7 @@
-use super::{Command, Commands, Settings};
+use super::{
+    Command, Commands, Settings,
+    adaptive::{Controller, Jitter, LossReports, MIN_JITTER_MS, Support},
+};
 use gst::prelude::*;
 use serde_json::json;
 use std::{
@@ -11,7 +14,53 @@ use std::{
 };
 
 type Targets = Arc<Mutex<HashMap<u64, (gst_app::AppSrc, gst::Pipeline)>>>;
-const AUDIO_ENCODER: &str = "opusenc bitrate=96000 audio-type=generic frame-size=20 inband-fec=true packet-loss-percentage=5";
+const AUDIO_ENCODER: &str = "opusenc bitrate=96000 audio-type=generic frame-size=10 inband-fec=true packet-loss-percentage=5";
+// Keep Opus away from the dynamically allocated H.264 RTX payload (usually 97).
+const OPUS_PAYLOAD: u32 = 111;
+#[derive(Default)]
+struct AudioLevel(Mutex<Option<u16>>);
+impl AudioLevel {
+    fn observe(&self, buffer: &gst::BufferRef) {
+        if buffer.get_size() < 2 {
+            return;
+        }
+        let Ok(data) = buffer.map_readable() else {
+            return;
+        };
+        // opusenc/opusdec negotiate native signed 16-bit PCM at these probes.
+        let Some(peak) = data
+            .as_slice()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&s| i16::from_ne_bytes(s).unsigned_abs())
+            .max()
+        else {
+            return;
+        };
+        let mut current = self.0.lock().unwrap();
+        *current = Some(current.unwrap_or(0).max(peak));
+    }
+    #[cfg(any(test, feature = "diagnostics"))]
+    fn peak(&self) -> f64 {
+        self.0.lock().unwrap().unwrap_or(0) as f64 / 32768.0
+    }
+    fn status(&self) -> &'static str {
+        match self.0.lock().unwrap().take() {
+            None => "sem dados",
+            Some(0) => "silêncio",
+            Some(_) => "sinal",
+        }
+    }
+}
+fn watch_audio(pad: &gst::Pad, level: Arc<AudioLevel>) {
+    pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+        if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data {
+            level.observe(buffer);
+        }
+        gst::PadProbeReturn::Ok
+    });
+}
 pub struct Capture {
     pub pipeline: gst::Pipeline,
     video: Targets,
@@ -23,6 +72,10 @@ pub struct Capture {
     pub encoder_input: Arc<AtomicU64>,
     pub encoded_bytes: Arc<AtomicU64>,
     audio_frames: Arc<AtomicU64>,
+    audio_level: Arc<AudioLevel>,
+    pub settings: Settings,
+    controller: Controller,
+    overruns: Arc<AtomicU64>,
     #[cfg(target_os = "linux")]
     _portal: Option<super::portal::Session>,
 }
@@ -319,19 +372,110 @@ pub fn recommend(requested: &Settings) -> Result<(Settings, String), String> {
     })
 }
 
+#[link(name = "gstaudio-1.0")]
+unsafe extern "C" {
+    fn gst_audio_decoder_set_latency(decoder: *mut std::ffi::c_void, min: u64, max: u64);
+}
+#[link(name = "opus")]
+unsafe extern "C" {
+    fn opus_packet_get_nb_samples(data: *const u8, len: i32, rate: i32) -> i32;
+}
+
+fn configure_opus_decoder(element: &gst::Element) {
+    let Some(pad) = element.get_static_pad("sink") else {
+        return;
+    };
+    let previous = AtomicU64::new(120_000_000);
+    let next_pts = AtomicU64::new(u64::MAX);
+    pad.add_probe(
+        gst::PadProbeType::BUFFER | gst::PadProbeType::EVENT_DOWNSTREAM,
+        move |pad, info| {
+            if let Some(gst::PadProbeData::Event(event)) = &info.data {
+                match event.view() {
+                    gst::EventView::Gap(gap) => {
+                        let (pts, duration) = gap.get();
+                        if let (Some(pts), Some(duration)) = (pts.0, duration.0) {
+                            next_pts.store(pts.saturating_add(duration), Ordering::Relaxed);
+                        }
+                    }
+                    gst::EventView::StreamStart(_)
+                    | gst::EventView::Segment(_)
+                    | gst::EventView::Caps(_)
+                    | gst::EventView::FlushStart(_)
+                    | gst::EventView::FlushStop(_) => {
+                        next_pts.store(u64::MAX, Ordering::Relaxed);
+                        previous.store(120_000_000, Ordering::Relaxed);
+                    }
+                    _ => (),
+                }
+            }
+            if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data
+                && let Ok(bytes) = buffer.map_readable()
+                && let Ok(length) = i32::try_from(bytes.len())
+                && length > 0
+            {
+                // SAFETY: libopus only inspects this readable packet, bounded by its actual length.
+                let samples = unsafe {
+                    opus_packet_get_nb_samples(bytes.as_slice().as_ptr(), length, 48_000)
+                };
+                if (1..=5760).contains(&samples) {
+                    let duration = samples as u64 * 1_000_000_000 / 48_000;
+                    if let Some(pts) = buffer.get_pts().0 {
+                        let expected = next_pts.load(Ordering::Relaxed);
+                        let missing = pts.saturating_sub(expected);
+                        // A full jitterbuffer can evict its own loss event; recover short holes once.
+                        if expected != u64::MAX && missing > duration / 2 && missing <= 120_000_000
+                        {
+                            let _ = pad.send_event(gst::event::Gap::new(
+                                gst::ClockTime::from_nseconds(expected),
+                                gst::ClockTime::from_nseconds(missing),
+                            ));
+                        }
+                        next_pts.store(pts.saturating_add(duration), Ordering::Relaxed);
+                    } else {
+                        next_pts.store(u64::MAX, Ordering::Relaxed);
+                    }
+                    if previous.swap(duration, Ordering::Relaxed) != duration
+                        && let Some(decoder) = pad.get_parent_element()
+                    {
+                        use glib_old::translate::ToGlibPtr;
+                        let pointer: *mut gst::gst_sys::GstElement = decoder.to_glib_none().0;
+                        // SAFETY: this pad belongs to the live opusdec (GstAudioDecoder); the setter is MT-safe.
+                        unsafe {
+                            gst_audio_decoder_set_latency(pointer.cast(), duration, duration);
+                        }
+                    }
+                }
+            }
+            gst::PadProbeReturn::Ok
+        },
+    );
+}
+
 fn configure_receiver_element(element: &gst::Element) {
+    if element
+        .get_factory()
+        .is_some_and(|f| f.get_name() == "rtpsession")
+    {
+        // Feedback must arrive before the low-latency jitterbuffer expires missing references.
+        element.set_property_from_str("rtcp-min-interval", "50000000");
+    }
     if element
         .get_factory()
         .is_some_and(|f| f.get_name() == "rtpjitterbuffer")
     {
         element.set_property_from_str("drop-on-latency", "true");
         element.set_property_from_str("do-lost", "true");
+        // Detect sequence gaps without requesting every predicted audio packet before it arrives.
+        element.set_property_from_str("rtx-next-seqnum", "false");
     }
     if element
         .get_factory()
         .is_some_and(|f| f.get_name() == "avdec_h264")
     {
         element.set_property_from_str("max-threads", &codec_threads().to_string());
+        // Frame threading buffers several future frames; slice threading preserves live latency.
+        element.set_property_from_str("thread-type", "slice");
     }
     if element.find_property("slave-method").is_some()
         && element.find_property("provide-clock").is_some()
@@ -339,6 +483,11 @@ fn configure_receiver_element(element: &gst::Element) {
         // All peers use SystemClock; resample follows it without moving the playout pointer.
         element.set_property_from_str("slave-method", "resample");
         element.set_property_from_str("provide-clock", "false");
+        element.set_property_from_str("buffer-time", "40000");
+        element.set_property_from_str("latency-time", "10000");
+        if element.find_property("low-latency").is_some() {
+            element.set_property_from_str("low-latency", "true");
+        }
         super::diagnostics::event!(
             "audio-clock-policy",
             json!({"factory":element.get_factory().map(|f|f.get_name().to_string()),"slave_method":"resample","provide_clock":false}),
@@ -415,24 +564,24 @@ impl Capture {
                     .any(|name| encoder.starts_with(name));
             let raw = if gpu_capture {
                 format!(
-                    "{source} ! video/x-raw(memory:D3D11Memory),framerate={}/1 ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12,width={},height={},pixel-aspect-ratio=1/1",
+                    "{source} ! capsfilter name=rate_filter caps=video/x-raw(memory:D3D11Memory),framerate={}/1 ! queue name=capture_queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! d3d11convert ! capsfilter name=size_filter caps=video/x-raw(memory:D3D11Memory),format=NV12,width={},height={},pixel-aspect-ratio=1/1",
                     s.fps,
                     s.height * 16 / 9,
                     s.height
                 )
             } else {
                 format!(
-                    "{source} ! video/x-raw,pixel-aspect-ratio=1/1 ! videorate drop-only=true ! video/x-raw,framerate={}/1 ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! videoconvert ! videoscale add-borders=true ! video/x-raw,format={format},width={},height={},pixel-aspect-ratio=1/1",
+                    "{source} ! video/x-raw,pixel-aspect-ratio=1/1 ! videorate drop-only=true ! capsfilter name=rate_filter caps=video/x-raw,framerate={}/1 ! queue name=capture_queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! videoconvertscale add-borders=true ! capsfilter name=size_filter caps=video/x-raw,format={format},width={},height={},pixel-aspect-ratio=1/1",
                     s.fps,
                     s.height * 16 / 9,
                     s.height
                 )
             };
             let text = format!(
-                "{raw} ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! {encoder} ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=video sync=false max-buffers=2 drop=false {}",
+                "{raw} ! queue name=encoder_queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! {encoder} ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=video sync=false max-buffers=2 drop=false {}",
                 if s.audio {
                     format!(
-                        "{audio} ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2 ! {AUDIO_ENCODER} ! appsink name=audio sync=false max-buffers=4 drop=true enable-last-sample=false"
+                        "{audio} ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2 ! identity name=capture_audio_meter ! {AUDIO_ENCODER} ! appsink name=audio sync=false max-buffers=4 drop=true enable-last-sample=false"
                     )
                 } else {
                     String::new()
@@ -456,9 +605,25 @@ impl Capture {
                 encoder_input: Arc::default(),
                 encoded_bytes: Arc::default(),
                 audio_frames: Arc::default(),
+                audio_level: Arc::default(),
+                settings: s.clone(),
+                controller: Controller::default(),
+                overruns: Arc::default(),
                 #[cfg(target_os = "linux")]
                 _portal: None,
             };
+            for name in ["capture_queue", "encoder_queue"] {
+                let overruns = capture.overruns.clone();
+                capture
+                    .pipeline
+                    .get_by_name(name)
+                    .ok_or("Fila de vídeo ausente")?
+                    .connect("overrun", false, move |_| {
+                        overruns.fetch_add(1, Ordering::Relaxed);
+                        None
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
             let encoder_element = capture
                 .pipeline
                 .get_by_name("encoder")
@@ -498,6 +663,15 @@ impl Capture {
                 capture.frames.clone(),
             )?;
             if s.audio {
+                watch_audio(
+                    &capture
+                        .pipeline
+                        .get_by_name("capture_audio_meter")
+                        .unwrap()
+                        .get_static_pad("src")
+                        .unwrap(),
+                    capture.audio_level.clone(),
+                );
                 attach(
                     &capture.pipeline,
                     "audio",
@@ -592,8 +766,120 @@ impl Capture {
         self.video.lock().unwrap().remove(&id);
         self.audio.lock().unwrap().remove(&id);
     }
+    fn support(&self) -> Support {
+        let bitrate = self
+            .pipeline
+            .get_by_name("encoder")
+            .and_then(|e| e.find_property("bitrate"))
+            .is_some_and(|p| {
+                use glib_old::translate::ToGlibPtr;
+                let spec: *const gst::gobject_sys::GParamSpec = p.to_glib_none().0;
+                // SAFETY: p owns the immutable GParamSpec; old GLib bindings truncate GStreamer's custom flags.
+                unsafe { (*spec).flags & gst::gst_sys::GST_PARAM_MUTABLE_PLAYING as u32 != 0 }
+            });
+        Support {
+            bitrate,
+            // shortcut: live resizing is verified for software encoders; validate each GPU backend before enabling it.
+            resize: matches!(self.encoder.as_str(), "x264enc" | "openh264enc"),
+        }
+    }
+    fn retune(&mut self, next: Settings) -> Result<(), String> {
+        next.validate()?;
+        if next.bitrate != self.settings.bitrate {
+            if !self.support().bitrate {
+                return Err("Este encoder não ajusta a taxa durante a transmissão".into());
+            }
+            let encoder = self
+                .pipeline
+                .get_by_name("encoder")
+                .ok_or("Encoder ausente")?;
+            let value = if self.encoder == "openh264enc" {
+                next.bitrate * 1000
+            } else {
+                next.bitrate
+            };
+            encoder
+                .set_property("bitrate", &value)
+                .map_err(|e| e.to_string())?;
+            if self.encoder == "openh264enc" {
+                encoder
+                    .set_property("max-bitrate", &value)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        for (name, changed) in [
+            ("rate_filter", next.fps != self.settings.fps),
+            ("size_filter", next.height != self.settings.height),
+        ] {
+            if !changed {
+                continue;
+            }
+            if name == "size_filter" && !self.support().resize {
+                return Err("Redimensionamento ao vivo indisponível neste encoder".into());
+            }
+            let filter = self
+                .pipeline
+                .get_by_name(name)
+                .ok_or("Ajuste de vídeo ausente")?;
+            let mut caps = filter
+                .get_property("caps")
+                .map_err(|e| e.to_string())?
+                .get::<gst::Caps>()
+                .map_err(|e| e.to_string())?
+                .ok_or("Formato de vídeo ausente")?;
+            let structure = caps
+                .make_mut()
+                .get_mut_structure(0)
+                .ok_or("Formato de vídeo inválido")?;
+            if name == "rate_filter" {
+                structure.set("framerate", &gst::Fraction::new(next.fps as i32, 1));
+            } else {
+                structure.set("width", &((next.height * 16 / 9) as i32));
+                structure.set("height", &(next.height as i32));
+            }
+            filter
+                .set_property("caps", &caps)
+                .map_err(|e| e.to_string())?;
+        }
+        self.settings = next;
+        Ok(())
+    }
+    pub fn adapt(
+        &mut self,
+        elapsed: Duration,
+        raw_fps: f64,
+        encoded_fps: f64,
+        network: bool,
+    ) -> Result<Option<&'static str>, String> {
+        let overruns = self.overruns.swap(0, Ordering::Relaxed);
+        if !self.settings.adaptive {
+            return Ok(None);
+        }
+        let local = encoded_fps < self.settings.fps as f64 * 0.8
+            && (raw_fps >= self.settings.fps as f64 * 0.8 || overruns >= 2);
+        let support = self.support();
+        let Some((next, reason)) =
+            self.controller
+                .next(&self.settings, elapsed, local, network, support)
+        else {
+            return Ok(None);
+        };
+        self.retune(next)?;
+        super::diagnostics::event!(
+            "quality-adapted",
+            json!({"reason":reason,"height":self.settings.height,"fps":self.settings.fps,"bitrate_kbps":self.settings.bitrate,"overruns":overruns})
+        );
+        Ok(Some(reason))
+    }
     pub fn error(&self) -> Option<String> {
         pipe_error(&self.pipeline)
+    }
+    pub fn audio_status(&self) -> &'static str {
+        if self.has_audio {
+            self.audio_level.status()
+        } else {
+            "desligado"
+        }
     }
 }
 impl Drop for Capture {
@@ -614,20 +900,74 @@ fn audio_source(s: &Settings) -> Result<String, String> {
 }
 #[cfg(target_os = "windows")]
 fn audio_source(s: &Settings) -> Result<String, String> {
+    let source = gst::ElementFactory::make("wasapi2src", None).map_err(|e| e.to_string())?;
+    let process_supported = source.find_property("loopback-mode").is_some()
+        && source.find_property("loopback-target-pid").is_some();
     if !s.exclude_discord {
-        return Ok("wasapi2src loopback=true low-latency=true".into());
+        return windows_loopback(process_supported, None);
     }
     let result = std::process::Command::new("powershell.exe")
         .args(["-NoProfile","-NonInteractive","-Command",
-            "$p=@(Get-CimInstance Win32_Process -Filter \"Name='Discord.exe'\"); $ids=@($p.ProcessId); $p | Where-Object { $_.ParentProcessId -notin $ids } | Select-Object -First 1 -ExpandProperty ProcessId"])
+            "$ErrorActionPreference='Stop'; $p=@(Get-CimInstance Win32_Process -Filter \"Name='Discord.exe'\"); $ids=@($p.ProcessId); $p | Where-Object { $_.ParentProcessId -notin $ids } | Select-Object -First 1 -ExpandProperty ProcessId"])
         .output().map_err(|e| e.to_string())?;
-    let pid: u32 = String::from_utf8_lossy(&result.stdout)
-        .trim()
-        .parse()
-        .map_err(|_| "Abra o Discord ou desative a exclusão de áudio")?;
-    Ok(format!(
-        "wasapi2src loopback=true low-latency=true loopback-mode=exclude-process-tree loopback-target-pid={pid}"
-    ))
+    let pid = discord_pid(result.status.success(), &result.stdout)?;
+    windows_loopback(process_supported, pid)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn discord_pid(success: bool, output: &[u8]) -> Result<Option<u32>, String> {
+    if !success {
+        return Err("Não foi possível localizar o Discord. Tente novamente ou desative a exclusão de áudio.".into());
+    }
+    let text = std::str::from_utf8(output)
+        .map_err(|_| "Resposta inválida ao localizar o Discord")?
+        .trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    text.parse::<u32>()
+        .ok()
+        .filter(|pid| *pid != 0)
+        .map(Some)
+        .ok_or_else(|| "Processo do Discord inválido".into())
+}
+
+#[cfg(test)]
+#[test]
+fn discord_can_be_closed_without_blocking_screen_sharing() {
+    let absent = discord_pid(true, b"\r\n").unwrap();
+    assert_eq!(absent, None);
+    assert_eq!(
+        windows_loopback(false, absent).unwrap(),
+        "wasapi2src loopback=true low-latency=true"
+    );
+    assert!(
+        !windows_loopback(true, absent)
+            .unwrap()
+            .contains("target-pid=0")
+    );
+    assert_eq!(discord_pid(true, b"1234\r\n").unwrap(), Some(1234));
+    assert!(discord_pid(false, b"").is_err());
+    assert!(discord_pid(true, b"0").is_err());
+    assert!(discord_pid(true, b"not a pid").is_err());
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_loopback(process_supported: bool, excluded_pid: Option<u32>) -> Result<String, String> {
+    if process_supported {
+        let pid = excluded_pid.unwrap_or_else(std::process::id);
+        if pid == 0 {
+            return Err("Processo de áudio inválido".into());
+        }
+        // Process loopback is independent of a render endpoint and excludes our own playback by default.
+        Ok(format!(
+            "wasapi2src loopback=true low-latency=true loopback-mode=exclude-process-tree loopback-target-pid={pid}"
+        ))
+    } else if excluded_pid.is_some() {
+        Err("Exclusão de processos de áudio indisponível neste Windows".into())
+    } else {
+        Ok("wasapi2src loopback=true low-latency=true".into())
+    }
 }
 
 #[cfg(target_endian = "little")]
@@ -635,14 +975,20 @@ const DISPLAY_SINK: &str = "video/x-raw,format=BGRx ! appsink name=display sync=
 #[cfg(target_endian = "big")]
 const DISPLAY_SINK: &str = "video/x-raw,format=xRGB ! appsink name=display sync=true qos=true max-lateness=100000000 max-buffers=1 drop=true enable-last-sample=false";
 fn receive_video(sink: &str) -> String {
+    // GTK consumes CPU frames; DXVA readback dropped frames on the tested Windows GPU.
+    let decoder = if cfg!(windows) {
+        "avdec_h264"
+    } else {
+        "decodebin"
+    };
     format!(
-        "queue name=rtp_input max-size-time=100000000 max-size-bytes=0 max-size-buffers=0 ! rtph264depay name=video_depay wait-for-keyframe=true request-keyframe=true ! video/x-h264,alignment=au ! h264parse ! decodebin ! videoconvert ! identity name=video_meter ! {sink}"
+        "queue name=rtp_input max-size-time=100000000 max-size-bytes=0 max-size-buffers=0 ! rtph264depay name=video_depay wait-for-keyframe=true request-keyframe=true ! video/x-h264,alignment=au ! h264parse ! {decoder} ! videoconvert ! identity name=video_meter ! {sink}"
     )
 }
 
 fn receive_audio(sink: &str) -> String {
     format!(
-        "queue name=rtp_input max-size-time=100000000 max-size-bytes=0 max-size-buffers=0 ! rtpopusdepay ! opusdec name=audio_decoder plc=true use-inband-fec=true ! identity name=audio_meter ! volume name=playback_volume ! audioconvert ! audioresample ! {sink}"
+        "queue name=rtp_input max-size-time=100000000 max-size-bytes=0 max-size-buffers=0 ! rtpopusdepay name=audio_depay ! opusdec name=audio_decoder plc=true use-inband-fec=true ! volume name=playback_volume ! identity name=audio_meter ! audioconvert ! audioresample ! {sink}"
     )
 }
 
@@ -650,7 +996,7 @@ fn receive_bin(media: &str, headless: bool) -> Result<gst::Bin, String> {
     let chain = match media {
         "video" => receive_video(DISPLAY_SINK),
         "audio" => receive_audio(if headless {
-            "fakesink sync=true"
+            "fakesink name=audio_output sync=true signal-handoffs=true"
         } else {
             "autoaudiosink sync=true"
         }),
@@ -666,6 +1012,10 @@ fn receive_bin(media: &str, headless: bool) -> Result<gst::Bin, String> {
     .map_err(|e| e.to_string())?;
     for element in bin.iterate_recurse().into_iter().flatten() {
         configure_receiver_element(&element);
+    }
+    if let Some(decoder) = bin.get_by_name("audio_decoder") {
+        // FEC holds one packet, rather than the maximum Opus packet length (120 ms).
+        configure_opus_decoder(&decoder);
     }
     // decodebin also has an unlinked raw pad until negotiation; never auto-select it as RTP input.
     let target = bin
@@ -687,8 +1037,12 @@ pub struct Peer {
     volume: Arc<Mutex<u8>>,
     pub video_frames: Arc<AtomicU64>,
     pub audio_frames: Arc<AtomicU64>,
+    audio_level: Arc<AudioLevel>,
     pub session: Option<String>,
     pub remote_ready: bool,
+    loss: Arc<Mutex<LossReports>>,
+    jitter: Mutex<Jitter>,
+    stats_pending: Arc<AtomicBool>,
     pub pending: Vec<(u32, String, Option<String>)>,
     pub created: std::time::Instant,
 }
@@ -717,6 +1071,7 @@ impl Peer {
         let volume = Arc::new(Mutex::new(100));
         let video_frames = Arc::new(AtomicU64::new(0));
         let audio_frames = Arc::new(AtomicU64::new(0));
+        let audio_level = Arc::new(AudioLevel::default());
         let app = |name: &str, chain: &str| {
             let limits = if name == "a" {
                 "max-buffers=12 max-time=120000000"
@@ -727,7 +1082,8 @@ impl Peer {
                 "appsrc name={name} is-live=true format=time min-latency=0 max-latency=-1 {limits} max-bytes=0 leaky-type=downstream ! {chain} ! rtc. "
             )
         };
-        let mut text = "webrtcbin name=rtc bundle-policy=max-bundle latency=150 ".to_string();
+        let mut text =
+            format!("webrtcbin name=rtc bundle-policy=max-bundle latency={MIN_JITTER_MS} ");
         if !headless {
             text.push_str("stun-server=stun://stun.cloudflare.com:3478 ");
         }
@@ -736,7 +1092,7 @@ impl Peer {
             let audio_ssrc = video_ssrc.wrapping_add(1);
             text.push_str(&app("v",&format!("video/x-h264,stream-format=byte-stream,alignment=au ! rtph264pay ssrc={video_ssrc} config-interval=-1 pt=96 aggregate-mode=zero-latency ! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000,ssrc=(uint){video_ssrc}")));
             if audio {
-                text.push_str(&app("a",&format!("audio/x-opus,rate=48000,channels=2,channel-mapping-family=0 ! rtpopuspay ssrc={audio_ssrc} pt=97 ! application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000,encoding-params=(string)2,sprop-stereo=(string)1,useinbandfec=(string)1,ssrc=(uint){audio_ssrc}")));
+                text.push_str(&app("a",&format!("audio/x-opus,rate=48000,channels=2,channel-mapping-family=0 ! rtpopuspay ssrc={audio_ssrc} pt={OPUS_PAYLOAD} ! application/x-rtp,media=audio,encoding-name=OPUS,payload={OPUS_PAYLOAD},clock-rate=48000,encoding-params=(string)2,sprop-stereo=(string)1,useinbandfec=(string)1,ssrc=(uint){audio_ssrc}")));
             }
         }
         let p = pipeline(&text)?;
@@ -797,6 +1153,7 @@ impl Peer {
             let gain = volume.clone();
             let video_count = video_frames.clone();
             let audio_count = audio_frames.clone();
+            let audio_signal = audio_level.clone();
             rtc.connect_pad_added(move |_, pad| {
                 if pad.get_direction() != gst::PadDirection::Src {
                     return;
@@ -822,6 +1179,9 @@ impl Peer {
                         ("audio_meter", audio_count.clone())
                     };
                     if let Some(element) = bin.get_by_name(meter) {
+                        if media.as_deref() == Some("audio") {
+                            watch_audio(&element.get_static_pad("src").ok_or("Medidor de áudio sem saída")?, audio_signal.clone());
+                        }
                         if let Some(pad) = element.get_static_pad("src") {
                             self::meter(&pad, "receiver-output", Arc::default(), None);
                         }
@@ -870,8 +1230,12 @@ impl Peer {
             volume,
             video_frames,
             audio_frames,
+            audio_level,
             session: sending.then(|| format!("native-v2-{epoch}-{stream}-{generation}")),
             remote_ready: false,
+            loss: Arc::default(),
+            jitter: Mutex::default(),
+            stats_pending: Arc::default(),
             pending: vec![],
             created: std::time::Instant::now(),
         };
@@ -879,6 +1243,35 @@ impl Peer {
             .set_state(gst::State::Playing)
             .map_err(|e| e.to_string())?;
         Ok(peer)
+    }
+    pub fn tune_latency(&self, elapsed: Duration) {
+        if self.video.is_some() {
+            return;
+        }
+        let (mut late, mut jitter) = (0u64, 0u64);
+        for element in self.pipeline.iterate_recurse().into_iter().flatten() {
+            if element
+                .get_factory()
+                .is_some_and(|factory| factory.get_name() == "rtpjitterbuffer")
+                && let Ok(value) = element.get_property("stats")
+                && let Ok(Some(stats)) = value.get::<gst::Structure>()
+            {
+                late =
+                    late.saturating_add(stats.get::<u64>("num-late").ok().flatten().unwrap_or(0));
+                jitter = jitter.max(stats.get::<u64>("avg-jitter").ok().flatten().unwrap_or(0));
+            }
+        }
+        let next = self.jitter.lock().unwrap().next(elapsed, late, jitter);
+        if let Some(ms) = next {
+            self.rtc
+                .set_property("latency", &ms)
+                .expect("WebRTC latency is a writable u32 property");
+            let _ = self.pipeline.recalculate_latency();
+            super::diagnostics::event!(
+                "playback-latency",
+                json!({"generation":self.generation,"buffer_ms":ms,"late_packets":late,"jitter_ns":jitter})
+            );
+        }
     }
     pub fn log_stats(&self) {
         #[cfg(any(test, feature = "diagnostics"))]
@@ -888,16 +1281,42 @@ impl Peer {
                 "peer-metrics",
                 json!({"generation":generation,"direction":if self.video.is_some() {"send"} else {"receive"},"video_frames":self.video_frames.load(Ordering::Relaxed),"audio_buffers":self.audio_frames.load(Ordering::Relaxed),"volume":*self.volume.lock().unwrap(),"connection_state":self.rtc.get_property("connection-state").ok().and_then(|v|glib_old::EnumValue::from_value(&v).map(|e|e.get_nick().to_string()))}),
             );
-            let promise = gst::Promise::with_change_func(move |reply| {
-                if let Ok(Some(stats)) = reply {
-                    super::diagnostics::event!(
-                        "webrtc-stats",
-                        json!({"generation":generation,"stats":stats.to_string()}),
-                    );
-                }
-            });
-            let _ = self.rtc.emit("get-stats", &[&None::<gst::Pad>, &promise]);
         }
+        if self.video.is_none() || self.stats_pending.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let pending = self.stats_pending.clone();
+        let loss = self.loss.clone();
+        let promise = gst::Promise::with_change_func(move |reply| {
+            if let Ok(Some(stats)) = reply {
+                loss.lock()
+                    .unwrap()
+                    .observe(stats, std::time::Instant::now());
+            }
+            pending.store(false, Ordering::Relaxed);
+        });
+        if self
+            .rtc
+            .emit("get-stats", &[&None::<gst::Pad>, &promise])
+            .is_err()
+        {
+            self.stats_pending.store(false, Ordering::Relaxed);
+        }
+    }
+    pub fn connected(&self) -> bool {
+        self.rtc
+            .get_property("connection-state")
+            .ok()
+            .is_some_and(|value| {
+                glib_old::EnumValue::from_value(&value)
+                    .is_some_and(|state| state.get_nick() == "connected")
+            })
+    }
+    pub fn congested(&self) -> bool {
+        self.loss
+            .lock()
+            .unwrap()
+            .congested(std::time::Instant::now())
     }
     pub fn set_volume(&self, percent: u8) -> Result<(), String> {
         if percent > 100 {
@@ -911,6 +1330,14 @@ impl Peer {
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+    pub fn audio_status(&self) -> &'static str {
+        let status = self.audio_level.status();
+        if *self.volume.lock().unwrap() == 0 {
+            "silenciado"
+        } else {
+            status
+        }
     }
     pub fn candidate(
         &mut self,
@@ -977,6 +1404,20 @@ impl Drop for Peer {
 /// Exercises the actual shared encoder bridge; no desktop, browser or server is needed.
 #[cfg(any(test, feature = "diagnostics"))]
 pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
+    test_stream(network, false)
+}
+
+#[cfg(any(test, feature = "diagnostics"))]
+fn test_stream(network: bool, retune: bool) -> Result<serde_json::Value, String> {
+    test_stream_case(network, retune, false)
+}
+
+#[cfg(any(test, feature = "diagnostics"))]
+fn test_stream_case(
+    network: bool,
+    retune: bool,
+    packet_loss: bool,
+) -> Result<serde_json::Value, String> {
     if network {
         std::net::UdpSocket::bind("127.0.0.1:0")
             .map_err(|e| format!("O sistema bloqueou o teste UDP: {e}"))?;
@@ -988,9 +1429,13 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
         bitrate: 8000,
         ..Settings::default()
     };
-    let capture = Capture::start(
+    let mut capture = Capture::start(
         &settings,
-        "videotestsrc is-live=true pattern=ball",
+        if packet_loss {
+            "videotestsrc is-live=true pattern=smpte"
+        } else {
+            "videotestsrc is-live=true pattern=ball"
+        },
         "audiotestsrc is-live=true volume=0.05",
     )?;
     let caps = capture
@@ -1040,8 +1485,12 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
             volume: Arc::new(Mutex::new(100)),
             video_frames: Arc::default(),
             audio_frames: Arc::default(),
+            audio_level: Arc::default(),
             session: None,
             remote_ready: false,
+            loss: Arc::default(),
+            jitter: Mutex::default(),
+            stats_pending: Arc::default(),
             pending: vec![],
             created: std::time::Instant::now(),
         };
@@ -1059,6 +1508,15 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
                 })
                 .map_err(|e| e.to_string())?;
         }
+        watch_audio(
+            &receiver
+                .pipeline
+                .get_by_name("audio_meter")
+                .unwrap()
+                .get_static_pad("src")
+                .unwrap(),
+            receiver.audio_level.clone(),
+        );
         receiver
             .pipeline
             .set_state(gst::State::Playing)
@@ -1070,6 +1528,99 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
             receiver,
         )
     };
+    let injected = Arc::new(AtomicU64::new(0));
+    let last_loss = Arc::new(Mutex::new(None::<std::time::Instant>));
+    let presentation = Arc::new(Mutex::new(Vec::new()));
+    let audio_presentation = Arc::new(Mutex::new(Vec::new()));
+    let audio_signal = Arc::new(Mutex::new((0i16, 0u64, 0u64)));
+    if packet_loss {
+        let rtp = receiver
+            .pipeline
+            .iterate_recurse()
+            .into_iter()
+            .flatten()
+            .find(|element| {
+                element
+                    .get_factory()
+                    .is_some_and(|factory| factory.get_name() == "rtpbin")
+            })
+            .ok_or("Receptor RTP ausente")?;
+        let dropped = injected.clone();
+        let decoded = receiver.video_frames.clone();
+        let last_drop = last_loss.clone();
+        rtp.connect_pad_added(move |_, pad| {
+            if !pad.get_name().starts_with("recv_rtp_sink_") {
+                return;
+            }
+            let (dropped, decoded) = (dropped.clone(), decoded.clone());
+            let last_drop = last_drop.clone();
+            pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+                let Some(gst::PadProbeData::Buffer(buffer)) = &info.data else {
+                    return gst::PadProbeReturn::Ok;
+                };
+                let Ok(bytes) = buffer.map_readable() else {
+                    return gst::PadProbeReturn::Ok;
+                };
+                let bytes = bytes.as_slice();
+                if bytes.len() >= 12
+                    && bytes[1] & 127 == 96
+                    && decoded.load(Ordering::Relaxed) >= 100
+                    && dropped.load(Ordering::Relaxed) < 12
+                {
+                    let mut previous = last_drop.lock().unwrap();
+                    let now = std::time::Instant::now();
+                    if previous.is_none_or(|previous| {
+                        now.duration_since(previous) >= Duration::from_secs(3)
+                    }) {
+                        *previous = Some(now);
+                        dropped.fetch_add(1, Ordering::Relaxed);
+                        return gst::PadProbeReturn::Drop;
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
+        });
+        let times = presentation.clone();
+        let audio_times = audio_presentation.clone();
+        let signal = audio_signal.clone();
+        receiver
+            .pipeline
+            .connect("deep-element-added", false, move |values| {
+                if let Ok(Some(element)) = values[2].get::<gst::Element>()
+                    && matches!(element.get_name().as_str(), "video_meter" | "audio_output")
+                {
+                    let times = if element.get_name() == "audio_output" {
+                        audio_times.clone()
+                    } else {
+                        times.clone()
+                    };
+                    let audio = element.get_name() == "audio_output";
+                    let signal = signal.clone();
+                    element
+                        .connect("handoff", false, move |values| {
+                            if audio
+                                && let Ok(Some(buffer)) = values[1].get::<gst::Buffer>()
+                                && let Ok(bytes) = buffer.map_readable()
+                            {
+                                let mut signal = signal.lock().unwrap();
+                                for frame in bytes.as_slice().as_chunks::<4>().0 {
+                                    let sample = i16::from_ne_bytes([frame[0], frame[1]]);
+                                    if signal.0 < 0 && sample >= 0 {
+                                        signal.2 += 1;
+                                    }
+                                    signal.0 = sample;
+                                    signal.1 += 1;
+                                }
+                            }
+                            times.lock().unwrap().push(std::time::Instant::now());
+                            None
+                        })
+                        .unwrap();
+                }
+                None
+            })
+            .map_err(|e| e.to_string())?;
+    }
     if network {
         capture.add(2, &sender);
         let commands = tx.clone();
@@ -1088,8 +1639,11 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
             .and_then(|stats| stats.get::<u64>("rendered").ok().flatten())
             .unwrap_or(0)
     };
-    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    let deadline =
+        std::time::Instant::now() + Duration::from_secs(if packet_loss { 90 } else { 25 });
     let mut measured = None;
+    let mut reconfigured = false;
+    let mut latency_tick = std::time::Instant::now();
     while std::time::Instant::now() < deadline {
         if let Some(error) = capture
             .error()
@@ -1097,6 +1651,19 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
             .or_else(|| pipe_error(&sender.pipeline))
         {
             return Err(error);
+        }
+        if latency_tick.elapsed() >= Duration::from_secs(2) {
+            receiver.tune_latency(latency_tick.elapsed());
+            latency_tick = std::time::Instant::now();
+        }
+        if retune && !reconfigured && rendered(&receiver.pipeline) >= 30 {
+            capture.retune(Settings {
+                height: 720,
+                fps: 15,
+                bitrate: 2000,
+                ..settings.clone()
+            })?;
+            reconfigured = true;
         }
         if rendered(&receiver.pipeline) >= 90 && receiver.audio_frames.load(Ordering::Relaxed) >= 90
         {
@@ -1109,7 +1676,7 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
                     capture.encoder_input.load(Ordering::Relaxed),
                 )
             });
-            if sample.0.elapsed() >= Duration::from_secs(3) {
+            if sample.0.elapsed() >= Duration::from_secs(if packet_loss { 60 } else { 3 }) {
                 break;
             }
         }
@@ -1157,8 +1724,75 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
             _ => {}
         }
     }
+    let mut loss_report = serde_json::Value::Null;
+    if packet_loss {
+        let times = presentation.lock().unwrap();
+        let maximum = times
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]))
+            .chain(times.last().map(|last| last.elapsed()))
+            .max()
+            .unwrap_or(Duration::MAX);
+        println!(
+            "RTP loss test: {} packets dropped, {} frames, maximum video gap {} ms, {} audio buffers",
+            injected.load(Ordering::Relaxed),
+            times.len(),
+            maximum.as_millis(),
+            receiver.audio_frames.load(Ordering::Relaxed)
+        );
+        let audio_times = audio_presentation.lock().unwrap();
+        let audio_maximum = audio_times
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]))
+            .chain(audio_times.last().map(|last| last.elapsed()))
+            .max()
+            .unwrap_or(Duration::MAX);
+        let steady_start = last_loss
+            .lock()
+            .unwrap()
+            .ok_or("Nenhuma perda foi injetada")?
+            + Duration::from_secs(5);
+        let steady_gap = times
+            .windows(2)
+            .filter(|pair| pair[0] >= steady_start)
+            .map(|pair| pair[1].duration_since(pair[0]))
+            .max()
+            .unwrap_or(Duration::MAX);
+        let steady_fps = times.iter().filter(|time| **time >= steady_start).count() as f64
+            / steady_start.elapsed().as_secs_f64();
+        if steady_gap > Duration::from_millis(150) || steady_fps < 24.0 {
+            return Err(format!(
+                "Vídeo sem fluidez após recuperar a rede: {} ms / {steady_fps:.2} FPS",
+                steady_gap.as_millis()
+            ));
+        }
+        let signal = audio_signal.lock().unwrap();
+        let frequency = signal.2 as f64 * 48_000.0 / signal.1.max(1) as f64;
+        loss_report = json!({"dropped_video_packets":injected.load(Ordering::Relaxed),"maximum_video_gap_ms":maximum.as_millis(),"maximum_audio_gap_ms":audio_maximum.as_millis(),"audio_test_frequency_hz":frequency,"steady_max_video_gap_ms":steady_gap.as_millis(),"steady_video_fps":steady_fps});
+        if !(430.0..=450.0).contains(&frequency) {
+            return Err(format!(
+                "O áudio recebido não corresponde ao tom de teste de 440 Hz: {loss_report}"
+            ));
+        }
+        if audio_maximum > Duration::from_millis(100) {
+            return Err(format!("Áudio interrompido: {loss_report}"));
+        }
+        if injected.load(Ordering::Relaxed) != 12 || maximum > Duration::from_millis(500) {
+            return Err(format!(
+                "Reprodução interrompida após perda RTP: {} pacotes, maior intervalo {} ms",
+                injected.load(Ordering::Relaxed),
+                maximum.as_millis()
+            ));
+        }
+    }
     let video_frames = rendered(&receiver.pipeline);
     let audio_frames = receiver.audio_frames.load(Ordering::Relaxed);
+    let audio_peak = receiver.audio_level.peak();
+    if audio_peak < 0.01 {
+        return Err(format!(
+            "Autoteste recebeu áudio sem o sinal sonoro esperado (pico {audio_peak:.4})"
+        ));
+    }
     if video_frames < 90 || audio_frames < 90 {
         return Err(format!(
             "Autoteste expirou: {video_frames} quadros, {audio_frames} blocos de áudio; rede={network}"
@@ -1179,7 +1813,8 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
         .get::<i32>("height")
         .map_err(|e| e.to_string())?
         .ok_or("Altura ausente")?;
-    if (width, height) != (1920, 1080) {
+    let expected = if retune { (1280, 720) } else { (1920, 1080) };
+    if (width, height) != expected {
         return Err(format!("Resolução incorreta: {width}x{height}"));
     }
     if capture.pipeline.get_by_name("preview").is_some() {
@@ -1192,7 +1827,7 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
         .and_then(|s| s.try_pull_sample(gst::ClockTime::from_seconds(1)))
         .ok_or("Receptor não entregou imagem ao app")?;
     let displayed = super::video::Frame::new(&display).ok_or("Imagem nativa inválida")?;
-    if (displayed.width(), displayed.height()) != (1920, 1080) {
+    if (displayed.width(), displayed.height()) != expected {
         return Err("Resolução da imagem do app incorreta".into());
     }
     let sample = measured.ok_or("Não houve quadros suficientes para medir FPS")?;
@@ -1202,14 +1837,21 @@ pub fn self_test(network: bool) -> Result<serde_json::Value, String> {
     let raw_fps = (capture.raw_frames.load(Ordering::Relaxed) - sample.3) as f64 / seconds;
     let encoder_input_fps =
         (capture.encoder_input.load(Ordering::Relaxed) - sample.4) as f64 / seconds;
-    let report = json!({"preview":false, "display":format!("1920x1080 {}",if cfg!(target_endian="little"){"BGRx"}else{"xRGB"}), "received_fps":received_fps,"encoded_fps":encoded_fps,"raw_fps":raw_fps,"encoder_input_fps":encoder_input_fps,"measurement_seconds":seconds,"test":if network {"webrtc-loopback"} else {"encoder-bridge"},"encoder":capture.encoder,"width":width,"height":height,"video_frames":video_frames,"audio_buffers":audio_frames,"seconds_including_negotiation":start.elapsed().as_secs_f64()});
+    let latency = |pipeline: &gst::Pipeline| {
+        let mut query = gst::query::Latency::new();
+        pipeline
+            .query(&mut query)
+            .then(|| query.get_result().1.0.map(|ns| ns as f64 / 1_000_000.0))
+            .flatten()
+    };
+    let report = json!({"loss_recovery":loss_report,"capture_min_latency_ms":latency(&capture.pipeline),"receiver_min_latency_ms":latency(&receiver.pipeline),"preview":false, "display":format!("{width}x{height} {}",if cfg!(target_endian="little"){"BGRx"}else{"xRGB"}), "received_fps":received_fps,"encoded_fps":encoded_fps,"raw_fps":raw_fps,"encoder_input_fps":encoder_input_fps,"measurement_seconds":seconds,"test":if network {"webrtc-loopback"} else {"encoder-bridge"},"encoder":capture.encoder,"width":width,"height":height,"video_frames":video_frames,"audio_buffers":audio_frames,"audio_peak":audio_peak,"seconds_including_negotiation":start.elapsed().as_secs_f64()});
     super::diagnostics::event!("self-test", report.clone());
     // Stop the shared producer before tearing down the receiving decoder.
     capture
         .pipeline
         .set_state(gst::State::Null)
         .map_err(|e| e.to_string())?;
-    if received_fps < 24.0 {
+    if received_fps < if retune { 12.0 } else { 24.0 } {
         return Err(format!(
             "Desempenho abaixo de 24 FPS no teste 1080p30: {report}"
         ));
@@ -1232,6 +1874,7 @@ pub fn check_runtime() -> Result<(), String> {
         "appsink",
         "openh264enc",
         "openh264dec",
+        "avdec_h264",
         "h264parse",
         "opusenc",
         "opusdec",
@@ -1257,7 +1900,124 @@ pub fn check_runtime() -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn audio_level_verifies_real_decoded_sound_silence_and_mute() {
+        gst::init().unwrap();
+        for (wave, gain, expected) in [
+            ("sine", 1.0, "sinal"),
+            ("silence", 1.0, "silêncio"),
+            ("sine", 0.0, "silêncio"),
+        ] {
+            let chain = receive_audio("fakesink sync=false");
+            let p = pipeline(&format!("audiotestsrc num-buffers=20 samplesperbuffer=960 wave={wave} volume=0.1 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! {AUDIO_ENCODER} ! rtpopuspay ! {chain}")).unwrap();
+            p.get_by_name("playback_volume")
+                .unwrap()
+                .set_property("volume", &gain)
+                .unwrap();
+            let level = Arc::new(AudioLevel::default());
+            assert_eq!(level.status(), "sem dados");
+            watch_audio(
+                &p.get_by_name("audio_meter")
+                    .unwrap()
+                    .get_static_pad("src")
+                    .unwrap(),
+                level.clone(),
+            );
+            p.set_state(gst::State::Playing).unwrap();
+            let done = p.get_bus().unwrap().timed_pop_filtered(
+                gst::ClockTime::from_seconds(5),
+                &[gst::MessageType::Eos, gst::MessageType::Error],
+            );
+            p.set_state(gst::State::Null).unwrap();
+            assert!(
+                matches!(
+                    done.as_ref().map(|m| m.view()),
+                    Some(gst::MessageView::Eos(_))
+                ),
+                "{done:?}"
+            );
+            if expected == "sinal" {
+                assert!(level.peak() > 0.03);
+            }
+            assert_eq!(level.status(), expected, "wave={wave}, gain={gain}");
+            assert_eq!(
+                level.status(),
+                "sem dados",
+                "Stale audio must not look active"
+            );
+        }
+        let level = AudioLevel::default();
+        level.observe(gst::Buffer::new().as_ref());
+        assert_eq!(level.status(), "sem dados");
+        level.observe(gst::Buffer::from_slice(i16::MIN.to_ne_bytes().to_vec()).as_ref());
+        assert_eq!(level.peak(), 1.0);
+    }
+    #[test]
+    fn windows_loopback_uses_process_capture_when_supported_and_preserves_legacy() {
+        let process = windows_loopback(true, None).unwrap();
+        assert!(process.contains("loopback-mode=exclude-process-tree"));
+        assert!(process.contains(&format!("loopback-target-pid={}", std::process::id())));
+        assert!(
+            windows_loopback(true, Some(1234))
+                .unwrap()
+                .contains("loopback-target-pid=1234")
+        );
+        assert!(windows_loopback(true, Some(0)).is_err());
+        assert!(windows_loopback(false, Some(1234)).is_err());
+        assert_eq!(
+            windows_loopback(false, None).unwrap(),
+            "wasapi2src loopback=true low-latency=true"
+        );
+    }
+    #[test]
+    fn opus_fec_advertises_one_real_packet_of_latency() {
+        gst::init().unwrap();
+        let source = pipeline(&format!("audiotestsrc is-live=true num-buffers=30 samplesperbuffer=480 ! audio/x-raw,rate=48000,channels=2 ! {AUDIO_ENCODER} ! rtpopuspay name=rtp")).unwrap();
+        let bin = receive_bin("audio", true).unwrap();
+        source.add(&bin).unwrap();
+        source.get_by_name("rtp").unwrap().link(&bin).unwrap();
+        source.set_state(gst::State::Playing).unwrap();
+        let message = source.get_bus().unwrap().timed_pop_filtered(
+            gst::ClockTime::from_seconds(3),
+            &[gst::MessageType::Eos, gst::MessageType::Error],
+        );
+        let decoder = bin.get_by_name("audio_decoder").unwrap();
+        let mut upstream = gst::query::Latency::new();
+        let mut decoded = gst::query::Latency::new();
+        assert!(
+            decoder
+                .get_static_pad("sink")
+                .unwrap()
+                .peer_query(&mut upstream)
+        );
+        assert!(decoder.query(&mut decoded));
+        source.set_state(gst::State::Null).unwrap();
+        assert!(matches!(
+            message.as_ref().map(|m| m.view()),
+            Some(gst::MessageView::Eos(_))
+        ));
+        assert_eq!(
+            decoded.get_result().1 - upstream.get_result().1,
+            gst::ClockTime::from_mseconds(10)
+        );
+        assert_eq!(
+            decoder
+                .get_property("use-inband-fec")
+                .unwrap()
+                .get::<bool>()
+                .unwrap(),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn audio_jitter_tolerates_reordering_and_conceals_one_lost_packet() {
+        audio_jitter_case(false);
+    }
+    #[test]
+    fn audio_jitter_recovers_when_loss_notice_is_evicted() {
+        audio_jitter_case(true);
+    }
+    fn audio_jitter_case(discard_loss_notice: bool) {
         gst::init().unwrap();
         let source = pipeline(&format!("audiotestsrc num-buffers=60 samplesperbuffer=480 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! {AUDIO_ENCODER} ! rtpopuspay ! appsink name=packets sync=false")).unwrap();
         let packets = source
@@ -1274,6 +2034,15 @@ mod tests {
         assert!(samples.len() >= 25);
         let (tx, _rx) = std::sync::mpsc::sync_channel(32);
         let peer = Peer::with_output(1, 2, 1, false, true, tx, true).unwrap();
+        assert_eq!(
+            peer.rtc
+                .get_property("latency")
+                .unwrap()
+                .get::<u32>()
+                .unwrap(),
+            Some(MIN_JITTER_MS)
+        );
+        peer.rtc.set_property("latency", &150u32).unwrap();
         let latency = peer
             .rtc
             .get_property("latency")
@@ -1282,8 +2051,25 @@ mod tests {
             .unwrap()
             .unwrap();
         drop(peer);
-        let chain = receive_audio("fakesink sync=true");
-        let p = pipeline(&format!("appsrc name=network is-live=true format=time ! rtpjitterbuffer name=jitter latency={latency} do-lost=true ! {chain}")).unwrap();
+        let p = pipeline(&format!("appsrc name=network is-live=true format=time ! rtpjitterbuffer name=jitter latency={latency} do-lost=true")).unwrap();
+        let audio = receive_bin("audio", true).unwrap();
+        p.add(&audio).unwrap();
+        p.get_by_name("jitter").unwrap().link(&audio).unwrap();
+        if discard_loss_notice {
+            audio
+                .get_by_name("audio_depay")
+                .unwrap()
+                .get_static_pad("src")
+                .unwrap()
+                .add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, |_, info| {
+                    if let Some(gst::PadProbeData::Event(event)) = &info.data
+                        && matches!(event.view(), gst::EventView::Gap(_))
+                    {
+                        return gst::PadProbeReturn::Drop;
+                    }
+                    gst::PadProbeReturn::Ok
+                });
+        }
         let app = p
             .get_by_name("network")
             .unwrap()
@@ -1298,7 +2084,10 @@ mod tests {
         let mut sent_delayed = false;
         let push = |sample: &gst::Sample| {
             let mut buffer = sample.get_buffer().unwrap().to_owned();
-            buffer.make_mut().set_pts(p.get_current_running_time());
+            let data = buffer.make_mut();
+            data.set_pts(p.get_current_running_time());
+            // RTP arrival time must not retain the encoder's old DTS during replay/reordering.
+            data.set_dts(gst::CLOCK_TIME_NONE);
             app.push_buffer(buffer).unwrap();
         };
         for (index, sample) in samples.iter().enumerate() {
@@ -1352,8 +2141,8 @@ mod tests {
             "A packet delayed by 90 ms caused extra audio loss: {stats}"
         );
         assert!(
-            decoded.get::<u64>("plc-num-samples").unwrap().unwrap() > 0,
-            "Lost audio was not concealed: {decoded}"
+            (360..=600).contains(&decoded.get::<u64>("plc-num-samples").unwrap().unwrap()),
+            "One 10 ms loss must be concealed once, including timestamp rounding: {decoded}"
         );
     }
     #[test]
@@ -1413,6 +2202,23 @@ mod tests {
                         .get::<bool>()
                         .unwrap(),
                     Some(false)
+                );
+                assert_eq!(
+                    element
+                        .get_property("buffer-time")
+                        .unwrap()
+                        .get::<i64>()
+                        .unwrap(),
+                    Some(40_000),
+                    "Playback should not retain the default 200 ms buffer"
+                );
+                assert_eq!(
+                    element
+                        .get_property("latency-time")
+                        .unwrap()
+                        .get::<i64>()
+                        .unwrap(),
+                    Some(10_000)
                 );
             }
         }
@@ -1694,16 +2500,48 @@ mod tests {
         }
     }
     #[test]
+    fn adaptive_reconfiguration_keeps_video_audio_and_session_alive() {
+        let report = test_stream(false, true).unwrap();
+        assert_eq!(report["width"], 1280);
+        assert_eq!(report["height"], 720);
+        assert!(report["received_fps"].as_f64().unwrap() >= 12.0);
+        assert!(report["received_fps"].as_f64().unwrap() < 18.0);
+        assert!(report["audio_buffers"].as_u64().unwrap() >= 90);
+    }
+    #[test]
     fn shared_encoder_bridge_delivers_full_resolution_video_and_audio() {
         let report = self_test(false).unwrap();
         assert_eq!(report["width"], 1920);
         assert!(report["video_frames"].as_u64().unwrap() >= 90);
+        assert!(
+            report["audio_peak"].as_f64().unwrap_or(0.0) > 0.01,
+            "Decoded audio was not verified as non-silent"
+        );
     }
     #[test]
     #[ignore = "requires UDP sockets; run on Windows/Linux before distributing"]
     fn actual_webrtc_loopback_decodes_video_and_audio() {
-        self_test(true).unwrap();
+        let report = self_test(true).unwrap();
+        println!("{report}");
+        assert!(
+            report["receiver_min_latency_ms"].as_f64().unwrap() < 150.0,
+            "Unexpected latency on loopback: {report}"
+        );
     }
+    #[test]
+    #[ignore = "requires UDP sockets; run on Windows/Linux before distributing"]
+    fn actual_webrtc_loopback_adapts_video_without_losing_audio() {
+        test_stream(true, true).unwrap();
+    }
+    #[test]
+    #[ignore = "requires UDP sockets; 60 seconds of deliberate packet loss with continuous audio"]
+    fn actual_webrtc_loopback_recovers_video_loss_with_continuous_audio() {
+        let report = test_stream_case(true, false, true).unwrap();
+        println!("{report}");
+        assert!(report["received_fps"].as_f64().unwrap() > 20.0);
+        assert!(report["audio_buffers"].as_u64().unwrap() > 90);
+    }
+
     #[test]
     fn shared_encoder_uses_segment_time_and_skips_frames_before_peer_started() {
         gst::init().unwrap();
@@ -1818,6 +2656,19 @@ mod tests {
         .unwrap();
         let value = rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
         let sdp = value["description"]["sdp"].as_str().unwrap();
+        let mut payloads = std::collections::HashMap::new();
+        for line in sdp
+            .lines()
+            .filter_map(|line| line.strip_prefix("a=rtpmap:"))
+        {
+            let (payload, codec) = line.split_once(' ').unwrap();
+            if let Some(previous) = payloads.insert(payload, codec) {
+                assert_eq!(
+                    previous, codec,
+                    "BUNDLE reuses payload {payload} for different codecs"
+                );
+            }
+        }
         assert!(
             sdp.contains("a=ssrc:"),
             "Offer must identify RTP sources before first frame"

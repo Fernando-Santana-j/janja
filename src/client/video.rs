@@ -83,10 +83,19 @@ impl Frame {
         cr: &gtk::cairo::Context,
         width: f64,
         height: f64,
+        fill: bool,
     ) -> Result<(), gtk::cairo::Error> {
         cr.save()?;
         let result = (|| {
-            let scale = (width / self.width() as f64).min(height / self.height() as f64);
+            let (horizontal, vertical) =
+                (width / self.width() as f64, height / self.height() as f64);
+            let scale = if fill {
+                horizontal.max(vertical)
+            } else {
+                horizontal.min(vertical)
+            };
+            cr.rectangle(0., 0., width, height);
+            cr.clip();
             cr.translate(
                 (width - self.width() as f64 * scale) / 2.,
                 (height - self.height() as f64 * scale) / 2.,
@@ -102,6 +111,49 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fullscreen_fills_viewport_without_letterboxing_or_stretching() {
+        gst::init().unwrap();
+        let format = if cfg!(target_endian = "little") {
+            gst_video::VideoFormat::Bgrx
+        } else {
+            gst_video::VideoFormat::Xrgb
+        };
+        let info = gst_video::VideoInfo::builder(format, 16, 8)
+            .build()
+            .unwrap();
+        let mut pixels = Vec::new();
+        for _ in 0..8 {
+            for x in 0..16 {
+                let rgb = if x < 4 {
+                    0xff0000u32
+                } else if x < 12 {
+                    0x00ff00u32
+                } else {
+                    0x0000ffu32
+                };
+                pixels.extend_from_slice(&rgb.to_ne_bytes());
+            }
+        }
+        let sample = gst::Sample::builder()
+            .caps(&info.to_caps().unwrap())
+            .buffer(&gst::Buffer::from_slice(pixels))
+            .build();
+        let frame = Frame::new(&sample).unwrap();
+        let mut target = gtk::cairo::ImageSurface::create(gtk::cairo::Format::Rgb24, 8, 8).unwrap();
+        let cr = gtk::cairo::Context::new(&target).unwrap();
+        cr.set_source_rgb(0.078, 0.09, 0.11);
+        cr.paint().unwrap();
+        frame.paint(&cr, 8., 8., true).unwrap();
+        drop(cr);
+        for pixel in target.data().unwrap().as_chunks::<4>().0 {
+            assert_eq!(
+                u32::from_ne_bytes(*pixel) & 0xffffff,
+                0x00ff00,
+                "Fullscreen left bars or distorted the selected region"
+            );
+        }
+    }
     #[test]
     fn render_preserves_pixels_stride_and_buffer_lifetime() {
         gst::init().unwrap();
@@ -146,7 +198,7 @@ mod tests {
         assert_eq!((frame.width(), frame.height()), (3, 2));
         let mut target = gtk::cairo::ImageSurface::create(gtk::cairo::Format::Rgb24, 3, 2).unwrap();
         let cr = gtk::cairo::Context::new(&target).unwrap();
-        frame.paint(&cr, 3., 2.).unwrap();
+        frame.paint(&cr, 3., 2., false).unwrap();
         drop(cr);
         drop(frame);
         let data = target.data().unwrap();

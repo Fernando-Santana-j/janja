@@ -6,6 +6,7 @@ pub enum Icon {
     Volume,
     Close,
     Watch,
+    People,
     Settings,
     Leave,
     Cast,
@@ -18,6 +19,12 @@ pub fn image(icon: Icon) -> gtk::DrawingArea {
     image.connect_draw(move |area, cr| {
         let color = area.style_context().color(area.state_flags());
         cr.set_source_rgba(color.red(), color.green(), color.blue(), color.alpha());
+        let side = f64::from(area.allocated_width().min(area.allocated_height()));
+        cr.translate(
+            (f64::from(area.allocated_width()) - side) / 2.0,
+            (f64::from(area.allocated_height()) - side) / 2.0,
+        );
+        cr.scale(side / 18.0, side / 18.0);
         cr.set_line_width(1.7);
         cr.set_line_cap(gtk::cairo::LineCap::Round);
         let line = |x, y, a, b| {
@@ -54,6 +61,15 @@ pub fn image(icon: Icon) -> gtk::DrawingArea {
                 cr.line_to(15., 9.);
                 cr.line_to(5., 15.);
                 cr.close_path();
+            }
+            Icon::People => {
+                cr.arc(7., 5., 3., 0., std::f64::consts::TAU);
+                cr.new_sub_path();
+                cr.arc(7., 15., 5., std::f64::consts::PI, std::f64::consts::TAU);
+                cr.new_sub_path();
+                cr.arc(13., 5., 2., -1.2, 1.2);
+                cr.new_sub_path();
+                cr.arc(13., 15., 3., -std::f64::consts::FRAC_PI_2, 0.);
             }
             Icon::Volume => {
                 cr.move_to(3., 7.);

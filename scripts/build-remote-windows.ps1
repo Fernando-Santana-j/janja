@@ -1,16 +1,18 @@
 param([switch]$UpdateServer)
 $ErrorActionPreference = 'Stop'
 $archive = Join-Path $HOME 'janja-nativo-fontes.zip'
-$source = Join-Path $HOME 'Downloads\janja-nativo-r7'
+$source = Join-Path $HOME 'Downloads\janja-nativo-r11'
 if (!(Test-Path -LiteralPath $archive)) { throw "Arquivo ausente: $archive" }
 Expand-Archive -LiteralPath $archive -DestinationPath $source -Force
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $source 'scripts\build-windows.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Compilação falhou. O executável anterior não foi substituído.' }
-$built = Join-Path $source 'dist\janja-windows.exe'
-if (!(Test-Path -LiteralPath $built)) { throw "Executável ausente: $built" }
-$destination = Join-Path $HOME 'Downloads\janja-windows.exe'
-Copy-Item -LiteralPath $built -Destination $destination -Force
-Write-Host "Pronto: $destination"
+foreach ($name in @('janja-windows.exe', 'janja-setup-windows.exe')) {
+    $built = Join-Path $source "dist\$name"
+    if (!(Test-Path -LiteralPath $built)) { throw "Executável ausente: $built" }
+    $destination = Join-Path $HOME "Downloads\$name"
+    Copy-Item -LiteralPath $built -Destination $destination -Force
+    Write-Host "Pronto: $destination"
+}
 
 if ($UpdateServer) {
     $master = Join-Path $HOME 'janja-master-password.json'

@@ -1,0 +1,509 @@
+{
+  "date": "2026-11-12",
+  "platform": "Linux x86_64",
+  "gstreamer": "1.28.7",
+  "build": "release",
+  "conversion": {
+    "frames": 120,
+    "input": "BGRx 3840x2160",
+    "output": "I420 1280x720",
+    "before": {
+      "cpu_seconds": [
+        6.286,
+        6.052,
+        6.051
+      ],
+      "elapsed_seconds": [
+        6.666,
+        6.057,
+        6.056
+      ]
+    },
+    "after": {
+      "cpu_seconds": [
+        4.898,
+        4.894,
+        4.896
+      ],
+      "elapsed_seconds": [
+        4.902,
+        4.899,
+        4.901
+      ]
+    }
+  },
+  "encoder_bridge": {
+    "command": "target/release/janja --self-test --report /tmp/report.json",
+    "encoder": "openh264enc",
+    "profile": "1920x1080 30fps, Opus stereo",
+    "before": {
+      "cpu_seconds": [
+        3.475558,
+        3.418469,
+        3.389892
+      ],
+      "elapsed_seconds": [
+        6.316317,
+        6.247051,
+        6.262077
+      ],
+      "received_fps": [
+        29.961229,
+        29.98224,
+        29.986843
+      ],
+      "max_rss_kib_across_runs": 140412
+    },
+    "after": {
+      "cpu_seconds": [
+        3.309723,
+        3.266853,
+        3.276109
+      ],
+      "elapsed_seconds": [
+        6.333149,
+        6.238211,
+        6.257358
+      ],
+      "received_fps": [
+        29.904468,
+        29.960516,
+        29.960572
+      ],
+      "max_rss_kib_across_runs": 136896
+    }
+  },
+  "limitations": [
+    "Other desktop applications were running",
+    "Three samples only",
+    "Synthetic sources",
+    "No GTK paint, real capture or audio device",
+    "No GPU/Windows benchmark",
+    "RSS from resource.RUSAGE_CHILDREN, maximum across all runs"
+  ],
+  "r10_media_regression": {
+    "scope": "Autoteste sintético encoder-bridge em 1080p30 com áudio; executáveis empacotados r9/r10, execuções sequenciais. Sem GUI/captura real; não mede renderização GTK nem desempenho Windows. Desktop em uso, sem isolamento de carga externa.",
+    "reports": {
+      "r9": {
+        "audio_buffers": 302,
+        "audio_peak": 0.0506591796875,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.971139401207783,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.971139401207783,
+        "height": 1080,
+        "measurement_seconds": 3.002888839,
+        "preview": false,
+        "raw_fps": 29.971139401207783,
+        "received_fps": 29.971139401207783,
+        "seconds_including_negotiation": 6.18359492,
+        "test": "encoder-bridge",
+        "video_frames": 180,
+        "width": 1920
+      },
+      "r10": {
+        "audio_buffers": 301,
+        "audio_peak": 0.0506591796875,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.96297964001218,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.96297964001218,
+        "height": 1080,
+        "measurement_seconds": 3.00370661,
+        "preview": false,
+        "raw_fps": 29.96297964001218,
+        "received_fps": 29.96297964001218,
+        "seconds_including_negotiation": 6.164891294,
+        "test": "encoder-bridge",
+        "video_frames": 180,
+        "width": 1920
+      }
+    }
+  },
+  "r11": {
+    "build": "2026.11.12-r11-transmissao",
+    "latency_note": "GStreamer-reported receiver pipeline budget, not physical screen-to-screen or speaker latency. capture_min_latency_ms=0 is not a measurement of capture time.",
+    "loss_before": {
+      "dropped_video_packets": 3,
+      "maximum_video_gap_ms": 601,
+      "audio_buffers": 303
+    },
+    "latency_before_correction": [
+      {
+        "audio_buffers": 302,
+        "audio_peak": 0.0506591796875,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 30.271400590522774,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.938747836780763,
+        "height": 1080,
+        "loss_recovery": {
+          "dropped_video_packets": 3,
+          "maximum_audio_gap_ms": 20,
+          "maximum_video_gap_ms": 285
+        },
+        "measurement_seconds": 3.006137748,
+        "preview": false,
+        "raw_fps": 29.938747836780763,
+        "received_fps": 26.279567545618672,
+        "receiver_min_latency_ms": 290.0,
+        "seconds_including_negotiation": 6.3303288779999995,
+        "test": "webrtc-loopback",
+        "video_frames": 169,
+        "width": 1920
+      }
+    ],
+    "webrtc_current": [
+      {
+        "audio_buffers": 604,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.950788657843994,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.950788657843994,
+        "height": 1080,
+        "loss_recovery": null,
+        "measurement_seconds": 3.00492922,
+        "preview": false,
+        "raw_fps": 29.950788657843994,
+        "received_fps": 29.950788657843994,
+        "receiver_min_latency_ms": 88.0,
+        "seconds_including_negotiation": 6.1165703,
+        "test": "webrtc-loopback",
+        "video_frames": 180,
+        "width": 1920
+      },
+      {
+        "audio_buffers": 6359,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 25.00991714737258,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.991905972865187,
+        "height": 1080,
+        "loss_recovery": {
+          "audio_test_frequency_hz": 440.04403900597674,
+          "dropped_video_packets": 12,
+          "maximum_audio_gap_ms": 28,
+          "maximum_video_gap_ms": 310,
+          "steady_max_video_gap_ms": 114,
+          "steady_video_fps": 24.918485568330734
+        },
+        "measurement_seconds": 60.016192423,
+        "preview": false,
+        "raw_fps": 29.991905972865187,
+        "received_fps": 24.94326846743288,
+        "receiver_min_latency_ms": 89.0,
+        "seconds_including_negotiation": 63.672126455,
+        "test": "webrtc-loopback",
+        "video_frames": 1587,
+        "width": 1920
+      }
+    ],
+    "packaged_webrtc": {
+      "audio_buffers": 605,
+      "audio_peak": 0.05059814453125,
+      "capture_min_latency_ms": 0.0,
+      "display": "1920x1080 BGRx",
+      "encoded_fps": 30.134153699087356,
+      "encoder": "openh264enc",
+      "encoder_input_fps": 30.134153699087356,
+      "height": 1080,
+      "loss_recovery": null,
+      "measurement_seconds": 3.019829291,
+      "preview": false,
+      "raw_fps": 30.134153699087356,
+      "received_fps": 29.803009152943538,
+      "receiver_min_latency_ms": 89.0,
+      "seconds_including_negotiation": 6.138337833,
+      "test": "webrtc-loopback",
+      "video_frames": 180,
+      "width": 1920
+    },
+    "decoder_benchmark": {
+      "method": "Same 180-frame synthetic H264 1080p60 ~8Mbps clip, FFmpeg libx264 veryfast zerolatency GOP60, 4 threads; h264parse ! decoder ! videoconvert BGRx ! fakesink sync=false. Warmup then 3 alternating runs. Excludes GUI/capture/network.",
+      "results": {
+        "openh264": [
+          {
+            "frames": 180,
+            "seconds": 1.6400457739982812,
+            "cpu_seconds": 1.6399107849999996,
+            "decode_fps": 109.75303424682868
+          },
+          {
+            "frames": 180,
+            "seconds": 1.6482838439987972,
+            "cpu_seconds": 1.6483746989999997,
+            "decode_fps": 109.20449208754809
+          },
+          {
+            "frames": 180,
+            "seconds": 1.5165888590017857,
+            "cpu_seconds": 1.5173562059999988,
+            "decode_fps": 118.6874075538676
+          }
+        ],
+        "libav": [
+          {
+            "frames": 180,
+            "seconds": 0.47314158500012127,
+            "cpu_seconds": 1.3567723490000008,
+            "decode_fps": 380.43580548928895
+          },
+          {
+            "frames": 180,
+            "seconds": 0.459304323001561,
+            "cpu_seconds": 1.3017459729999992,
+            "decode_fps": 391.8970298901111
+          },
+          {
+            "frames": 180,
+            "seconds": 0.4135342369991122,
+            "cpu_seconds": 1.1705251840000006,
+            "decode_fps": 435.272303706226
+          }
+        ],
+        "libav_slice": [
+          {
+            "frames": 180,
+            "seconds": 0.6155164559968398,
+            "cpu_seconds": 1.0466404600000008,
+            "decode_fps": 292.43734793164356
+          },
+          {
+            "frames": 180,
+            "seconds": 0.5598936540009163,
+            "cpu_seconds": 0.9552165120000016,
+            "decode_fps": 321.48962345571687
+          },
+          {
+            "frames": 180,
+            "seconds": 0.5734840030017949,
+            "cpu_seconds": 0.949881757,
+            "decode_fps": 313.8710043485496
+          }
+        ]
+      },
+      "median_cpu_reduction_percent": 41.75192207178503
+    },
+    "tests": {
+      "library_passed": 88,
+      "portable_passed": 3,
+      "ignored": 4,
+      "ignored_udp_run_separately_passed": 3,
+      "gui_executed": false,
+      "opus_mutation_detected": true
+    },
+    "artifacts": {
+      "janja-linux": {
+        "bytes": 120553008
+      },
+      "janja-diagnostico-linux": {
+        "bytes": 120722832
+      }
+    },
+    "stress_60_seconds": {
+      "method": "1080p30 SMPTE including moving noise, 8Mbps target, 60s measurement after warmup, 12 video RTP packets dropped at 3s intervals, 440Hz synthetic stereo audio; actual WebRTC UDP/DTLS/SRTP loopback, no desktop or physical audio device.",
+      "runs": [
+        {
+          "audio_buffers": 6364,
+          "audio_peak": 0.05059814453125,
+          "capture_min_latency_ms": 0.0,
+          "display": "1920x1080 BGRx",
+          "encoded_fps": 24.99360029158686,
+          "encoder": "openh264enc",
+          "encoder_input_fps": 29.99232034990423,
+          "height": 1080,
+          "loss_recovery": {
+            "audio_test_frequency_hz": 440.0597202577401,
+            "dropped_video_packets": 12,
+            "maximum_audio_gap_ms": 29,
+            "maximum_video_gap_ms": 378
+          },
+          "measurement_seconds": 60.015363233,
+          "preview": false,
+          "raw_fps": 29.99232034990423,
+          "received_fps": 24.926950690809292,
+          "receiver_min_latency_ms": 89.0,
+          "seconds_including_negotiation": 63.767065409,
+          "test": "webrtc-loopback",
+          "video_frames": 1586,
+          "width": 1920
+        },
+        {
+          "audio_buffers": 6372,
+          "audio_peak": 0.05059814453125,
+          "capture_min_latency_ms": 0.0,
+          "display": "1920x1080 BGRx",
+          "encoded_fps": 25.00877307759562,
+          "encoder": "openh264enc",
+          "encoder_input_fps": 29.99053400377889,
+          "height": 1080,
+          "loss_recovery": {
+            "audio_test_frequency_hz": 440.0565060430074,
+            "dropped_video_packets": 12,
+            "maximum_audio_gap_ms": 28,
+            "maximum_video_gap_ms": 218,
+            "steady_max_video_gap_ms": 113,
+            "steady_video_fps": 24.875523516266657
+          },
+          "measurement_seconds": 60.018937968,
+          "preview": false,
+          "raw_fps": 29.99053400377889,
+          "received_fps": 24.94212744647611,
+          "receiver_min_latency_ms": 89.0,
+          "seconds_including_negotiation": 63.840797204,
+          "test": "webrtc-loopback",
+          "video_frames": 1587,
+          "width": 1920
+        },
+        {
+          "audio_buffers": 6359,
+          "audio_peak": 0.05059814453125,
+          "capture_min_latency_ms": 0.0,
+          "display": "1920x1080 BGRx",
+          "encoded_fps": 25.00991714737258,
+          "encoder": "openh264enc",
+          "encoder_input_fps": 29.991905972865187,
+          "height": 1080,
+          "loss_recovery": {
+            "audio_test_frequency_hz": 440.04403900597674,
+            "dropped_video_packets": 12,
+            "maximum_audio_gap_ms": 28,
+            "maximum_video_gap_ms": 310,
+            "steady_max_video_gap_ms": 114,
+            "steady_video_fps": 24.918485568330734
+          },
+          "measurement_seconds": 60.016192423,
+          "preview": false,
+          "raw_fps": 29.991905972865187,
+          "received_fps": 24.94326846743288,
+          "receiver_min_latency_ms": 89.0,
+          "seconds_including_negotiation": 63.672126455,
+          "test": "webrtc-loopback",
+          "video_frames": 1587,
+          "width": 1920
+        }
+      ],
+      "resource_sampling_first_run": [
+        {
+          "seconds": 0.00039495400051237084,
+          "rss_kib": 161352,
+          "hwm_kib": 161352,
+          "threads": 37,
+          "cpu_seconds": 13.07
+        },
+        {
+          "seconds": 5.000851611999678,
+          "rss_kib": 161296,
+          "hwm_kib": 161296,
+          "threads": 37,
+          "cpu_seconds": 15.74
+        },
+        {
+          "seconds": 10.00126284399812,
+          "rss_kib": 161600,
+          "hwm_kib": 161600,
+          "threads": 37,
+          "cpu_seconds": 18.5
+        },
+        {
+          "seconds": 15.001712667999527,
+          "rss_kib": 160824,
+          "hwm_kib": 160824,
+          "threads": 37,
+          "cpu_seconds": 21.46
+        },
+        {
+          "seconds": 20.002096881999023,
+          "rss_kib": 160916,
+          "hwm_kib": 160916,
+          "threads": 37,
+          "cpu_seconds": 24.43
+        },
+        {
+          "seconds": 25.0026388389997,
+          "rss_kib": 140292,
+          "hwm_kib": 160508,
+          "threads": 37,
+          "cpu_seconds": 27.75
+        },
+        {
+          "seconds": 30.003226304997952,
+          "rss_kib": 108296,
+          "hwm_kib": 160508,
+          "threads": 37,
+          "cpu_seconds": 30.8
+        },
+        {
+          "seconds": 35.00362034999853,
+          "rss_kib": 108240,
+          "hwm_kib": 160508,
+          "threads": 37,
+          "cpu_seconds": 33.7
+        }
+      ],
+      "resource_note": "Debug integration process contains synthetic capture, encoder, both WebRTC peers and decoder; not application memory/CPU comparison, not a leak test.",
+      "final_assertions": "Tone 430–450Hz; audio gap <=100ms; video gap including end freshness <=500ms; FPS >=24; after last loss +5s, video gap <=150ms and FPS >=24."
+    },
+    "webrtc_before_audio_notice_fix": [
+      {
+        "audio_buffers": 605,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.96524867184504,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.96524867184504,
+        "height": 1080,
+        "loss_recovery": null,
+        "measurement_seconds": 3.003479163,
+        "preview": false,
+        "raw_fps": 29.96524867184504,
+        "received_fps": 29.96524867184504,
+        "receiver_min_latency_ms": 88.0,
+        "seconds_including_negotiation": 6.133917206,
+        "test": "webrtc-loopback",
+        "video_frames": 180,
+        "width": 1920
+      },
+      {
+        "audio_buffers": 604,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 30.266597876077814,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.93399789941762,
+        "height": 1080,
+        "loss_recovery": {
+          "dropped_video_packets": 3,
+          "maximum_audio_gap_ms": 29,
+          "maximum_video_gap_ms": 183
+        },
+        "measurement_seconds": 3.006614763,
+        "preview": false,
+        "raw_fps": 29.93399789941762,
+        "received_fps": 27.938398039456445,
+        "receiver_min_latency_ms": 108.0,
+        "seconds_including_negotiation": 6.137015501,
+        "test": "webrtc-loopback",
+        "video_frames": 174,
+        "width": 1920
+      }
+    ],
+    "audio_loss_notice_recovery": {
+      "cause": "Bounded jitterbuffer can evict the GstRTPPacketLost event at its loss deadline; confirmed in an instrumented failing run (loss count 1, PLC samples 0).",
+      "fix": "Infer short missing audio periods up to 120ms from packet timestamps when no matching GAP event arrived. Existing GAP notices advance the expected timestamp, avoiding duplicate concealment. Stream/caps/segment/flush events reset tracking.",
+      "red_mutation_detected": true,
+      "repeat_tests": {
+        "runs": 30,
+        "tests_per_run": 2,
+        "failures": []
+      }
+    }
+  }
+}
