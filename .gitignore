@@ -3,9 +3,13 @@
 /docs/*
 !/docs/auditoria-20261112.md
 !/docs/medicoes-20261112.json
+!/docs/plano-r12.md
+!/docs/atualizacoes.md
+!/docs/medicoes-20261113.json
 /bugs/
 /target/
 /dist/
+/.release-keys/
 /*.zip
 /*.exe
 **/*.rs.bk

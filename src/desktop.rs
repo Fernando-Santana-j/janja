@@ -51,7 +51,11 @@ pub fn install() -> io::Result<()> {
             std::env::var_os("HOME").map(|p| std::path::PathBuf::from(p).join(".local/share"))
         })
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Pasta de usuário ausente"))?;
-    install_at(&data, &std::env::current_exe()?)
+    let executable = std::env::current_exe()?;
+    let launcher = std::env::var_os("JANJA_INSTALLED_LAUNCHER")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.parent() == executable.parent() && path.is_file());
+    install_at(&data, launcher.as_deref().unwrap_or(&executable))
 }
 
 #[cfg(test)]

@@ -1,0 +1,1056 @@
+{
+  "build": "2026.11.13-r12-leve",
+  "environment": {
+    "platform": "Linux-7.2.9-arch1-1-x86_64-with-glibc2.44",
+    "cairo_workload": "headless gradient, release example, 40 paints/sample, 3 alternating repeats"
+  },
+  "limitations": [
+    "Cairo painting only: percentages do not describe total application CPU or GPU use.",
+    "Non-integer enlargement to 1440p remains expensive with bilinear.",
+    "Media uses diagnostics in both versions; this comparison does not isolate instrumentation removed from the normal client.",
+    "Media loopback uses a software encoder on Linux and does not include the desktop, physical audio devices or a real game.",
+    "No measurable overall media CPU reduction: before 3.610326 s, after 3.664726 s; about 30 FPS maintained."
+  ],
+  "render_summary": [
+    {
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ],
+      "median_ms_per_frame": {
+        "Good": 0.5153597249999999,
+        "Bilinear": 0.534559,
+        "Nearest": 0.160882075
+      },
+      "selected_filter": "Bilinear",
+      "paint_time_reduction_percent": -3.725412380643456
+    },
+    {
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ],
+      "median_ms_per_frame": {
+        "Good": 22.4963516,
+        "Bilinear": 0.940956525,
+        "Nearest": 0.3237564
+      },
+      "selected_filter": "Bilinear",
+      "paint_time_reduction_percent": 95.8172927693751
+    },
+    {
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ],
+      "median_ms_per_frame": {
+        "Good": 25.316485975000003,
+        "Bilinear": 25.305893375,
+        "Nearest": 1.6395378250000001
+      },
+      "selected_filter": "Bilinear",
+      "paint_time_reduction_percent": 0.04184071995798622
+    },
+    {
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ],
+      "median_ms_per_frame": {
+        "Good": 57.828523925,
+        "Bilinear": 57.3339978,
+        "Nearest": 4.5918076
+      },
+      "selected_filter": "Nearest",
+      "paint_time_reduction_percent": 92.05961472238978
+    },
+    {
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ],
+      "median_ms_per_frame": {
+        "Good": 36.31475385,
+        "Bilinear": 1.025098425,
+        "Nearest": 0.42554725000000004
+      },
+      "selected_filter": "Bilinear",
+      "paint_time_reduction_percent": 97.17718470780713
+    }
+  ],
+  "media_summary": {
+    "before": {
+      "median_cpu_seconds": 3.610326,
+      "median_max_rss_kib": 141328,
+      "received_fps": [
+        29.98571886160162,
+        29.979399116268073,
+        29.990405209648483
+      ]
+    },
+    "after": {
+      "median_cpu_seconds": 3.664726,
+      "median_max_rss_kib": 142580,
+      "received_fps": [
+        29.991032051604897,
+        29.9869410869825,
+        29.989807304211904
+      ]
+    }
+  },
+  "render_samples": [
+    {
+      "filter": "Good",
+      "ms_per_frame": 0.5212333499999999,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 0.5385958,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.159303675,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.160882075,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 0.49597365,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 0.507764525,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 0.5153597249999999,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 0.534559,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.164815875,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 22.436265775000003,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 0.9470187250000001,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.3237564,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.392790675,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 0.940956525,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 22.537969175,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 22.4963516,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 0.9251692,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.31502287500000004,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        1280,
+        720
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 25.364797675,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 25.305893375,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 1.6395378250000001,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 1.6252274,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 25.1033475,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 25.316485975000003,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 25.2987197,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 25.796119875,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 1.8877797,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        2560,
+        1440
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 56.985488350000004,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 57.16838775,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 4.602278725,
+      "repetition": 0,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 4.100622725,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 57.3339978,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 58.114070049999995,
+      "repetition": 1,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 57.828523925,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 57.71625335,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 4.5918076,
+      "repetition": 2,
+      "source": [
+        1920,
+        1080
+      ],
+      "target": [
+        3840,
+        2160
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 36.55662815000001,
+      "repetition": 0,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 0.9215659500000001,
+      "repetition": 0,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.49285662500000005,
+      "repetition": 0,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.42554725000000004,
+      "repetition": 1,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 1.025098425,
+      "repetition": 1,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 36.31475385,
+      "repetition": 1,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Good",
+      "ms_per_frame": 36.19977285,
+      "repetition": 2,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Bilinear",
+      "ms_per_frame": 1.1135804999999999,
+      "repetition": 2,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    },
+    {
+      "filter": "Nearest",
+      "ms_per_frame": 0.28294745,
+      "repetition": 2,
+      "source": [
+        3840,
+        2160
+      ],
+      "target": [
+        960,
+        540
+      ]
+    }
+  ],
+  "media_samples": [
+    {
+      "variant": "before",
+      "report": {
+        "audio_buffers": 603,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.98571886160162,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.98571886160162,
+        "height": 1080,
+        "loss_recovery": null,
+        "measurement_seconds": 3.001428794,
+        "preview": false,
+        "raw_fps": 29.98571886160162,
+        "received_fps": 29.98571886160162,
+        "receiver_min_latency_ms": 30.0,
+        "seconds_including_negotiation": 6.059019437,
+        "test": "encoder-bridge",
+        "video_frames": 180,
+        "width": 1920
+      },
+      "cpu_seconds": 3.610326,
+      "max_rss_kib": 141328,
+      "elapsed_seconds": 6.1409624960001565
+    },
+    {
+      "variant": "after",
+      "report": {
+        "audio_buffers": 602,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.991032051604897,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.991032051604897,
+        "height": 1080,
+        "loss_recovery": null,
+        "measurement_seconds": 3.000897063,
+        "preview": false,
+        "raw_fps": 29.991032051604897,
+        "received_fps": 29.991032051604897,
+        "receiver_min_latency_ms": 30.0,
+        "seconds_including_negotiation": 6.058350241,
+        "test": "encoder-bridge",
+        "video_frames": 180,
+        "width": 1920
+      },
+      "cpu_seconds": 3.7034469999999997,
+      "max_rss_kib": 142472,
+      "elapsed_seconds": 6.141309510000156
+    },
+    {
+      "variant": "after",
+      "report": {
+        "audio_buffers": 602,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.9869410869825,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.9869410869825,
+        "height": 1080,
+        "loss_recovery": null,
+        "measurement_seconds": 3.00130646,
+        "preview": false,
+        "raw_fps": 29.9869410869825,
+        "received_fps": 29.9869410869825,
+        "receiver_min_latency_ms": 30.0,
+        "seconds_including_negotiation": 6.058793214,
+        "test": "encoder-bridge",
+        "video_frames": 180,
+        "width": 1920
+      },
+      "cpu_seconds": 3.664726,
+      "max_rss_kib": 142888,
+      "elapsed_seconds": 6.142941902000075
+    },
+    {
+      "variant": "before",
+      "report": {
+        "audio_buffers": 603,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.979399116268073,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.979399116268073,
+        "height": 1080,
+        "loss_recovery": null,
+        "measurement_seconds": 3.002061504,
+        "preview": false,
+        "raw_fps": 29.979399116268073,
+        "received_fps": 29.979399116268073,
+        "receiver_min_latency_ms": 30.0,
+        "seconds_including_negotiation": 6.060003752,
+        "test": "encoder-bridge",
+        "video_frames": 180,
+        "width": 1920
+      },
+      "cpu_seconds": 3.605591,
+      "max_rss_kib": 141732,
+      "elapsed_seconds": 6.140146561000165
+    },
+    {
+      "variant": "before",
+      "report": {
+        "audio_buffers": 602,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.990405209648483,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.990405209648483,
+        "height": 1080,
+        "loss_recovery": null,
+        "measurement_seconds": 3.000959786,
+        "preview": false,
+        "raw_fps": 29.990405209648483,
+        "received_fps": 29.990405209648483,
+        "receiver_min_latency_ms": 30.0,
+        "seconds_including_negotiation": 6.060938269,
+        "test": "encoder-bridge",
+        "video_frames": 180,
+        "width": 1920
+      },
+      "cpu_seconds": 3.6484119999999995,
+      "max_rss_kib": 140916,
+      "elapsed_seconds": 6.143265473000156
+    },
+    {
+      "variant": "after",
+      "report": {
+        "audio_buffers": 602,
+        "audio_peak": 0.05059814453125,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.989807304211904,
+        "encoder": "openh264enc",
+        "encoder_input_fps": 29.989807304211904,
+        "height": 1080,
+        "loss_recovery": null,
+        "measurement_seconds": 3.001019616,
+        "preview": false,
+        "raw_fps": 29.989807304211904,
+        "received_fps": 29.989807304211904,
+        "receiver_min_latency_ms": 30.0,
+        "seconds_including_negotiation": 6.057594375,
+        "test": "encoder-bridge",
+        "video_frames": 180,
+        "width": 1920
+      },
+      "cpu_seconds": 3.664695,
+      "max_rss_kib": 142580,
+      "elapsed_seconds": 6.138611758000025
+    }
+  ],
+  "verification": {
+    "linux": {
+      "library_tests_passed": 88,
+      "portable_tests_passed": 3,
+      "ordinary_runtime_tests_passed": 1,
+      "ignored": 5,
+      "environment_filtered": [
+        "real_websocket_auth_presence_capacity_and_cleanup (sockets blocked)",
+        "private_bus_checks_session_and_portal_acquire_and_release (DBus socket blocked)"
+      ],
+      "updater_offline_tests_passed": 7,
+      "clippy": "all-targets native,portable, warnings denied: passed",
+      "format": "passed",
+      "runtime_counter_mutation": "failed as expected when watchdog counter was removed; original passed"
+    },
+    "windows": {
+      "core_suite": "88 library + 2 portable + 1 ordinary-runtime tests passed; 5 initially ignored",
+      "media_suite": "all 3 UDP loopback tests passed, including 60 s packet loss; bounded CPU/GPU stress passed",
+      "installer": "installation, reinstallation, version and uninstallation passed in a temporary path with spaces and accent; unknown user file preserved",
+      "signed_manifest": "both real Windows/Linux installer hashes verified; metadata signed and verified against the committed public key",
+      "current_update_tests": "New Windows transaction mocks passed before the resource-disposal fix; resource disposal assertions and real-installer retest pending.",
+      "pending": [
+        "inspect the staged installer lock and rerun the corrected real-installer test",
+        "Defender scan of final Windows artifacts",
+        "real public update between two GitHub Releases",
+        "real game capture and cross-OS physical audio devices"
+      ],
+      "latency_note": "GStreamer latency-query minimum is not a measured end-to-end screen-to-screen latency.",
+      "distribution_failure": "The additional real-installer test reached cleanup and Windows denied removal of staged setup.exe. This can mask an earlier exception; antivirus scan was not reached. Process objects now explicitly disposed; inspection and rerun required."
+    },
+    "linux_real_update": {
+      "result": "passed",
+      "version": "2026.11.13-r12-leve",
+      "native_version_output": "Janja 2026.11.13-r12-leve (GTK + GStreamer; sem navegador)",
+      "actual_installer": true,
+      "actual_release_signature": true,
+      "user_data_preserved": true,
+      "limitations": "Network and progress UI replaced with local fixtures; previous revision simulated through version.txt. No GitHub Release was published."
+    }
+  },
+  "windows_reports": {
+    "stress": {
+      "baseline": {
+        "audio_buffers": 616,
+        "audio_peak": 0.061676025390625,
+        "capture_min_latency_ms": 0.0,
+        "display": "1920x1080 BGRx",
+        "encoded_fps": 29.876846642245777,
+        "encoder": "amfh264enc",
+        "encoder_input_fps": 29.876846642245777,
+        "height": 1080,
+        "loss_recovery": null,
+        "maximum_audio_gap_ms": 27,
+        "maximum_video_gap_ms": 50,
+        "measurement_seconds": 3.0123661,
+        "preview": false,
+        "raw_fps": 29.876846642245777,
+        "received_fps": 29.876846642245777,
+        "receiver_min_latency_ms": 89.0,
+        "seconds_including_negotiation": 6.3465893,
+        "test": "webrtc-loopback",
+        "video_frames": 180,
+        "width": 1920
+      },
+      "cpu_worker_duty_percent": 80,
+      "cpu_workers": 2,
+      "gpu_baseline_fps": 59.496748502694324,
+      "gpu_loaded_fps": 60.04643844030041,
+      "loaded": [
+        {
+          "audio_buffers": 609,
+          "audio_peak": 0.055816650390625,
+          "capture_min_latency_ms": 0.0,
+          "display": "1920x1080 BGRx",
+          "encoded_fps": 29.92810570686744,
+          "encoder": "amfh264enc",
+          "encoder_input_fps": 29.92810570686744,
+          "height": 1080,
+          "loss_recovery": null,
+          "maximum_audio_gap_ms": 38,
+          "maximum_video_gap_ms": 79,
+          "measurement_seconds": 3.0072067,
+          "preview": false,
+          "raw_fps": 29.92810570686744,
+          "received_fps": 29.92810570686744,
+          "receiver_min_latency_ms": 89.0,
+          "seconds_including_negotiation": 6.2016958,
+          "test": "webrtc-loopback",
+          "video_frames": 180,
+          "width": 1920
+        },
+        {
+          "audio_buffers": 610,
+          "audio_peak": 0.05059814453125,
+          "capture_min_latency_ms": 0.0,
+          "display": "1920x1080 BGRx",
+          "encoded_fps": 30.183345248015385,
+          "encoder": "amfh264enc",
+          "encoder_input_fps": 30.183345248015385,
+          "height": 1080,
+          "loss_recovery": null,
+          "maximum_audio_gap_ms": 36,
+          "maximum_video_gap_ms": 80,
+          "measurement_seconds": 3.0149077,
+          "preview": false,
+          "raw_fps": 30.183345248015385,
+          "received_fps": 29.851660135399833,
+          "receiver_min_latency_ms": 90.0,
+          "seconds_including_negotiation": 6.2079347,
+          "test": "webrtc-loopback",
+          "video_frames": 180,
+          "width": 1920
+        },
+        {
+          "audio_buffers": 607,
+          "audio_peak": 0.05059814453125,
+          "capture_min_latency_ms": 0.0,
+          "display": "1920x1080 BGRx",
+          "encoded_fps": 29.994174131577847,
+          "encoder": "amfh264enc",
+          "encoder_input_fps": 29.994174131577847,
+          "height": 1080,
+          "loss_recovery": null,
+          "maximum_audio_gap_ms": 41,
+          "maximum_video_gap_ms": 80,
+          "measurement_seconds": 3.0005827,
+          "preview": false,
+          "raw_fps": 29.994174131577847,
+          "received_fps": 29.66090553011587,
+          "receiver_min_latency_ms": 94.0,
+          "seconds_including_negotiation": 6.1872047,
+          "test": "webrtc-loopback",
+          "video_frames": 179,
+          "width": 1920
+        }
+      ],
+      "stress": "bounded-synthetic-not-a-game"
+    },
+    "network": {
+      "audio_buffers": 607,
+      "audio_peak": 0.061676025390625,
+      "capture_min_latency_ms": 0.0,
+      "display": "1920x1080 BGRx",
+      "encoded_fps": 30.195604137222496,
+      "encoder": "amfh264enc",
+      "encoder_input_fps": 30.195604137222496,
+      "height": 1080,
+      "loss_recovery": null,
+      "maximum_audio_gap_ms": 28,
+      "maximum_video_gap_ms": 49,
+      "measurement_seconds": 3.0136837,
+      "preview": false,
+      "raw_fps": 30.195604137222496,
+      "received_fps": 29.863784311538733,
+      "receiver_min_latency_ms": 89.0,
+      "seconds_including_negotiation": 6.2615386,
+      "test": "webrtc-loopback",
+      "video_frames": 180,
+      "width": 1920
+    },
+    "packet_loss": {
+      "audio_buffers": 6309,
+      "audio_peak": 0.05059814453125,
+      "capture_min_latency_ms": 0.0,
+      "display": "1920x1080 BGRx",
+      "encoded_fps": 29.99610770506419,
+      "encoder": "amfh264enc",
+      "encoder_input_fps": 30.01277220934478,
+      "height": 1080,
+      "loss_recovery": {
+        "audio_test_frequency_hz": 440.05863011527947,
+        "dropped_video_packets": 12,
+        "maximum_audio_gap_ms": 37,
+        "maximum_video_gap_ms": 119,
+        "steady_max_video_gap_ms": 45,
+        "steady_video_fps": 30.00602146989925
+      },
+      "maximum_audio_gap_ms": 37,
+      "maximum_video_gap_ms": 119,
+      "measurement_seconds": 60.0077856,
+      "preview": false,
+      "raw_fps": 30.01277220934478,
+      "received_fps": 29.929449687941826,
+      "receiver_min_latency_ms": 88.0,
+      "seconds_including_negotiation": 63.1927695,
+      "test": "webrtc-loopback",
+      "video_frames": 1886,
+      "width": 1920
+    }
+  }
+}

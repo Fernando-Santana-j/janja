@@ -48,12 +48,18 @@ Section "Janja"
   SetOutPath "$INSTDIR"
   SetOverwrite on
   File /oname=janja.exe "..\dist\janja-windows.exe"
+  File /oname=update.ps1 "update-windows.ps1"
+  File "..\assets\update-config.json"
+  File "..\assets\update-public.xml"
+  FileOpen $0 "$INSTDIR\version.txt" w
+  FileWrite $0 "${APP_VERSION}"
+  FileClose $0
   IfErrors install_error
   WriteUninstaller "$INSTDIR\uninstall.exe"
   IfErrors install_error
   CreateDirectory "$SMPROGRAMS\Janja"
-  CreateShortcut "$SMPROGRAMS\Janja\Janja.lnk" "$INSTDIR\janja.exe"
-  CreateShortcut "$DESKTOP\Janja.lnk" "$INSTDIR\janja.exe"
+  CreateShortcut "$SMPROGRAMS\Janja\Janja.lnk" "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\update.ps1"' "$INSTDIR\janja.exe"
+  CreateShortcut "$DESKTOP\Janja.lnk" "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\update.ps1"' "$INSTDIR\janja.exe"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "Janja"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "InfoCore Tech"
@@ -81,6 +87,10 @@ Section "Uninstall"
   ClearErrors
   Delete "$INSTDIR\janja.exe"
   IfErrors uninstall_error
+  Delete "$INSTDIR\update.ps1"
+  Delete "$INSTDIR\update-config.json"
+  Delete "$INSTDIR\update-public.xml"
+  Delete "$INSTDIR\version.txt"
   Delete "$INSTDIR\uninstall.exe"
   Delete "$DESKTOP\Janja.lnk"
   Delete "$SMPROGRAMS\Janja\Janja.lnk"

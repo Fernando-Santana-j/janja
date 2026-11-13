@@ -28,14 +28,17 @@ impl AudioLevel {
             return;
         };
         // opusenc/opusdec negotiate native signed 16-bit PCM at these probes.
-        let Some(peak) = data
+        #[cfg(any(test, feature = "diagnostics"))]
+        let peak = data
             .as_slice()
             .as_chunks::<2>()
             .0
             .iter()
             .map(|&s| i16::from_ne_bytes(s).unsigned_abs())
-            .max()
-        else {
+            .max();
+        #[cfg(not(any(test, feature = "diagnostics")))]
+        let peak = Some(u16::from(data.as_slice().iter().any(|byte| *byte != 0)));
+        let Some(peak) = peak else {
             return;
         };
         let mut current = self.0.lock().unwrap();
@@ -269,7 +272,11 @@ fn encoders(s: &Settings) -> Vec<String> {
         ),
         (
             "amfh264enc",
-            format!("bitrate={} gop-size={} b-frames=0", s.bitrate, s.fps),
+            // B-frame controls are conditional on the AMD adapter; ultra-low-latency does not reorder frames.
+            format!(
+                "bitrate={} gop-size={} usage=ultra-low-latency rate-control=cbr",
+                s.bitrate, s.fps
+            ),
         ),
         (
             "mfh264enc",
@@ -544,10 +551,18 @@ impl Capture {
         }
     }
     fn start(s: &Settings, source: &str, audio: &str) -> Result<Self, String> {
+        Self::start_encoders(s, source, audio, encoders(s))
+    }
+    fn start_encoders(
+        s: &Settings,
+        source: &str,
+        audio: &str,
+        candidates: Vec<String>,
+    ) -> Result<Self, String> {
         let (factory, options) = source.split_once(' ').unwrap_or((source, ""));
         let source = format!("{factory} name=screen_source {options}");
         let mut failures = Vec::new();
-        for encoder in encoders(s) {
+        for encoder in candidates {
             super::diagnostics::event!(
                 "encoder-attempt",
                 json!({"encoder":encoder,"settings":format!("{s:?}"),"source":source}),
@@ -628,6 +643,7 @@ impl Capture {
                 .pipeline
                 .get_by_name("encoder")
                 .ok_or("Encoder ausente")?;
+            #[cfg(any(test, feature = "diagnostics"))]
             meter(
                 &encoder_element
                     .get_static_pad("sink")
@@ -1013,6 +1029,10 @@ fn receive_bin(media: &str, headless: bool) -> Result<gst::Bin, String> {
     for element in bin.iterate_recurse().into_iter().flatten() {
         configure_receiver_element(&element);
     }
+    #[cfg(not(any(test, feature = "diagnostics")))]
+    if let Some(element) = bin.get_by_name("audio_meter") {
+        element.set_property_from_str("signal-handoffs", "false");
+    }
     if let Some(decoder) = bin.get_by_name("audio_decoder") {
         // FEC holds one packet, rather than the maximum Opus packet length (120 ms).
         configure_opus_decoder(&decoder);
@@ -1182,15 +1202,19 @@ impl Peer {
                         if media.as_deref() == Some("audio") {
                             watch_audio(&element.get_static_pad("src").ok_or("Medidor de áudio sem saída")?, audio_signal.clone());
                         }
+                        #[cfg(any(test, feature = "diagnostics"))]
                         if let Some(pad) = element.get_static_pad("src") {
                             self::meter(&pad, "receiver-output", Arc::default(), None);
                         }
-                        element
-                            .connect("handoff", false, move |_| {
-                                count.fetch_add(1, Ordering::Relaxed);
-                                None
-                            })
-                            .map_err(|e| e.to_string())?;
+                        // Decoded video count also guards the 30-second startup timeout.
+                        if media.as_deref() == Some("video") || cfg!(any(test, feature = "diagnostics")) {
+                            element
+                                .connect("handoff", false, move |_| {
+                                    count.fetch_add(1, Ordering::Relaxed);
+                                    None
+                                })
+                                .map_err(|e| e.to_string())?;
+                        }
                     }
                     if !headless
                         && let Some(display) = bin
@@ -1429,7 +1453,14 @@ fn test_stream_case(
         bitrate: 8000,
         ..Settings::default()
     };
-    let mut capture = Capture::start(
+    // Resize tests need a verified software backend; ordinary tests keep hardware selection.
+    let candidates = encoders(&settings)
+        .into_iter()
+        .filter(|encoder| {
+            !retune || encoder.starts_with("openh264enc") || encoder.starts_with("x264enc")
+        })
+        .collect();
+    let mut capture = Capture::start_encoders(
         &settings,
         if packet_loss {
             "videotestsrc is-live=true pattern=smpte"
@@ -1437,6 +1468,7 @@ fn test_stream_case(
             "videotestsrc is-live=true pattern=ball"
         },
         "audiotestsrc is-live=true volume=0.05",
+        candidates,
     )?;
     let caps = capture
         .pipeline
@@ -1580,6 +1612,8 @@ fn test_stream_case(
                 gst::PadProbeReturn::Ok
             });
         });
+    }
+    if network {
         let times = presentation.clone();
         let audio_times = audio_presentation.clone();
         let signal = audio_signal.clone();
@@ -1844,7 +1878,15 @@ fn test_stream_case(
             .then(|| query.get_result().1.0.map(|ns| ns as f64 / 1_000_000.0))
             .flatten()
     };
-    let report = json!({"loss_recovery":loss_report,"capture_min_latency_ms":latency(&capture.pipeline),"receiver_min_latency_ms":latency(&receiver.pipeline),"preview":false, "display":format!("{width}x{height} {}",if cfg!(target_endian="little"){"BGRx"}else{"xRGB"}), "received_fps":received_fps,"encoded_fps":encoded_fps,"raw_fps":raw_fps,"encoder_input_fps":encoder_input_fps,"measurement_seconds":seconds,"test":if network {"webrtc-loopback"} else {"encoder-bridge"},"encoder":capture.encoder,"width":width,"height":height,"video_frames":video_frames,"audio_buffers":audio_frames,"audio_peak":audio_peak,"seconds_including_negotiation":start.elapsed().as_secs_f64()});
+    let maximum_gap = |times: &Mutex<Vec<std::time::Instant>>| {
+        times
+            .lock()
+            .unwrap()
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]).as_millis() as u64)
+            .max()
+    };
+    let report = json!({"maximum_video_gap_ms":maximum_gap(&presentation),"maximum_audio_gap_ms":maximum_gap(&audio_presentation),"loss_recovery":loss_report,"capture_min_latency_ms":latency(&capture.pipeline),"receiver_min_latency_ms":latency(&receiver.pipeline),"preview":false, "display":format!("{width}x{height} {}",if cfg!(target_endian="little"){"BGRx"}else{"xRGB"}), "received_fps":received_fps,"encoded_fps":encoded_fps,"raw_fps":raw_fps,"encoder_input_fps":encoder_input_fps,"measurement_seconds":seconds,"test":if network {"webrtc-loopback"} else {"encoder-bridge"},"encoder":capture.encoder,"width":width,"height":height,"video_frames":video_frames,"audio_buffers":audio_frames,"audio_peak":audio_peak,"seconds_including_negotiation":start.elapsed().as_secs_f64()});
     super::diagnostics::event!("self-test", report.clone());
     // Stop the shared producer before tearing down the receiving decoder.
     capture
@@ -2182,6 +2224,16 @@ mod tests {
             if encoder.starts_with("openh264enc") {
                 assert!(encoder.contains("multi-thread="));
             }
+        }
+    }
+    #[test]
+    fn available_encoder_options_parse_on_this_hardware() {
+        gst::init().unwrap();
+        for encoder in encoders(&Settings::default()) {
+            assert!(
+                pipeline(&encoder).is_ok(),
+                "Encoder options rejected: {encoder}"
+            );
         }
     }
     #[test]
@@ -2540,6 +2592,100 @@ mod tests {
         println!("{report}");
         assert!(report["received_fps"].as_f64().unwrap() > 20.0);
         assert!(report["audio_buffers"].as_u64().unwrap() > 90);
+    }
+
+    #[test]
+    #[ignore = "requires UDP; bounded CPU pressure and Windows D3D11 load for about 30 seconds"]
+    fn bounded_resource_pressure_keeps_webrtc_video_and_audio() {
+        let baseline = self_test(true).unwrap();
+        struct GpuLoad(Option<gst::Pipeline>);
+        impl Drop for GpuLoad {
+            fn drop(&mut self) {
+                if let Some(pipeline) = &self.0 {
+                    let _ = pipeline.set_state(gst::State::Null);
+                }
+            }
+        }
+        let gpu = GpuLoad(if cfg!(windows) {
+            Some(pipeline("d3d11testsrc is-live=true pattern=snow ! video/x-raw(memory:D3D11Memory),format=BGRA,width=3840,height=2160,framerate=60/1 ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12,width=1280,height=720 ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=BGRA,width=3840,height=2160 ! identity name=load_meter signal-handoffs=true ! fakesink sync=true enable-last-sample=false").unwrap())
+        } else {
+            None
+        });
+        let gpu_frames = Arc::new(AtomicU64::new(0));
+        if let Some(pipeline) = &gpu.0 {
+            let count = gpu_frames.clone();
+            pipeline
+                .get_by_name("load_meter")
+                .unwrap()
+                .connect("handoff", false, move |_| {
+                    count.fetch_add(1, Ordering::Relaxed);
+                    None
+                })
+                .unwrap();
+            pipeline.set_state(gst::State::Playing).unwrap();
+        }
+        std::thread::sleep(Duration::from_secs(2));
+        let sample_gpu = || gpu.0.as_ref().map(|_| gpu_frames.load(Ordering::Relaxed));
+        let before = sample_gpu();
+        let gpu_start = std::time::Instant::now();
+        std::thread::sleep(Duration::from_secs(2));
+        let gpu_baseline = before.map(|count| {
+            (gpu_frames.load(Ordering::Relaxed) - count) as f64 / gpu_start.elapsed().as_secs_f64()
+        });
+        let workers = (std::thread::available_parallelism().map_or(2, usize::from) / 2).clamp(1, 6);
+        let stop = AtomicBool::new(false);
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        let load_start = std::time::Instant::now();
+        let before = sample_gpu();
+        let reports = std::thread::scope(|scope| {
+            for worker in 0..workers {
+                let stop = &stop;
+                scope.spawn(move || {
+                    let mut value = worker as u64 + 1;
+                    while !stop.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+                        let busy = std::time::Instant::now();
+                        while busy.elapsed() < Duration::from_millis(80) {
+                            value = value.wrapping_mul(6364136223846793005).wrapping_add(1);
+                            std::hint::black_box(value);
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                });
+            }
+            let reports = (0..3)
+                .map(|_| self_test(true))
+                .collect::<Result<Vec<_>, _>>();
+            stop.store(true, Ordering::Relaxed);
+            reports
+        });
+        let gpu_loaded = before.map(|count| {
+            (gpu_frames.load(Ordering::Relaxed) - count) as f64 / load_start.elapsed().as_secs_f64()
+        });
+        let gpu_error = gpu.0.as_ref().and_then(pipe_error);
+        drop(gpu);
+        let reports = reports.unwrap();
+        let result = json!({"stress":"bounded-synthetic-not-a-game","cpu_workers":workers,"cpu_worker_duty_percent":80,"gpu_baseline_fps":gpu_baseline,"gpu_loaded_fps":gpu_loaded,"baseline":baseline,"loaded":reports});
+        println!("{result}");
+        if let Some(path) = std::env::var_os("JANJA_STRESS_REPORT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+        }
+        assert!(gpu_error.is_none(), "GPU workload failed: {gpu_error:?}");
+        if let (Some(baseline), Some(loaded)) = (gpu_baseline, gpu_loaded) {
+            assert!(
+                baseline > 0.0 && loaded >= baseline * 0.8,
+                "Synthetic GPU workload fell from {baseline:.2} to {loaded:.2} FPS"
+            );
+        }
+        for report in reports {
+            assert!(
+                report["maximum_video_gap_ms"].as_u64().unwrap() <= 250,
+                "Video stalled: {report}"
+            );
+            assert!(
+                report["maximum_audio_gap_ms"].as_u64().unwrap() <= 150,
+                "Audio stalled: {report}"
+            );
+        }
     }
 
     #[test]

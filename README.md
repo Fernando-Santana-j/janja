@@ -22,3 +22,9 @@ O cliente de navegador e seus lançadores foram removidos. O app nativo não ini
 O cliente comum não contém logs automáticos nem comandos de diagnóstico. `python3 scripts/package-native.py --diagnostics` gera também um executável de diagnóstico separado, com logs e autotestes. Em desenvolvimento: `cargo run --features native,diagnostics --bin janja -- --self-test` e `--network-test`.
 
 Erro `not-negotiated` ou FPS baixo: [diagnóstico atual e coleta automática de logs](docs/diagnostico-atual.md).
+# Instalação e atualizações
+
+Os instaladores Windows e Linux podem consultar Releases assinadas no GitHub ao
+abrir o Janja. Os portáteis continuam disponíveis. Consulte
+[atualizações e publicação](docs/atualizacoes.md) para configurar a chave, executar
+os testes e publicar uma versão. O atualizador não fica residente na transmissão.

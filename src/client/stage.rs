@@ -158,10 +158,10 @@ impl Tile {
         sound.pack_start(&icons::image(Icon::Volume), false, false, 0);
         sound.pack_start(&volume, false, false, 0);
         bar.pack_start(&sound, false, false, 0);
-        let sizing = gtk::Button::with_label("Ver conteúdo inteiro");
+        let sizing = gtk::Button::with_label("Preencher (corta)");
         sizing.set_no_show_all(true);
         sizing.set_tooltip_text(Some(
-            "Alterna entre preencher a tela com corte e mostrar a imagem inteira sem deformação.",
+            "A imagem inteira preserva a proporção. Preencher amplia e corta as bordas.",
         ));
         let fit_mode = fill.clone();
         let repaint = area.downgrade();
@@ -171,7 +171,7 @@ impl Tile {
             button.set_label(if filled {
                 "Ver conteúdo inteiro"
             } else {
-                "Preencher tela"
+                "Preencher (corta)"
             });
             if let Some(area) = repaint.upgrade() {
                 area.queue_draw();
@@ -241,8 +241,8 @@ impl Tile {
             full.set_destroy_with_parent(true);
             full.set_decorated(false);
             full.style_context().add_class("fullscreen-window");
-            tile.fill.set(true);
-            tile.sizing.set_label("Ver conteúdo inteiro");
+            tile.fill.set(false);
+            tile.sizing.set_label("Preencher (corta)");
             tile.sizing.show();
             tile.slot.remove(&tile.content);
             full.add(&tile.content);
@@ -578,11 +578,11 @@ mod tests {
         assert!((0..window.display().n_monitors()).contains(&origin_monitor));
         tile.expand.emit_clicked();
         assert!(tile.fullscreen.borrow().is_some());
-        assert!(tile.fill.get());
-        tile.sizing.emit_clicked();
         assert!(!tile.fill.get());
         tile.sizing.emit_clicked();
         assert!(tile.fill.get());
+        tile.sizing.emit_clicked();
+        assert!(!tile.fill.get());
         if let Some(timer) = tile.timer.borrow_mut().take() {
             timer.remove();
         }

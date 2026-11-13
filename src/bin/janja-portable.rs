@@ -56,6 +56,11 @@ fn cache_root() -> Result<PathBuf, Box<dyn Error>> {
     }
 }
 fn run() -> Result<(), Box<dyn Error>> {
+    #[cfg(target_os = "linux")]
+    if std::env::args().any(|arg| arg == "--install-desktop") {
+        desktop::install()?;
+        return Ok(());
+    }
     if BUNDLE.is_empty() {
         return Err("Pacote vazio; gere o executável com scripts/package-native.py".into());
     }

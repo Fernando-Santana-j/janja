@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Bundle native libraries and build one self-extracting executable. No web runtime."""
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -157,9 +159,19 @@ def main():
         installer = dist / "janja-setup-windows.exe"
         (dist / "janja-setup-windows.pending.exe").replace(installer)
         print(f"Instalador: {installer} ({installer.stat().st_size / 1024**2:.1f} MiB)")
+    else:
+        subprocess.run([sys.executable, str(root / "scripts/package-linux-installer.py")], check=True)
     if args.diagnostics:
         diagnostic_staged.replace(diagnostic)
         print(f"Diagnóstico opcional: {diagnostic} ({diagnostic.stat().st_size / 1024**2:.1f} MiB)")
+    version = re.search(r'pub const BUILD: &str = "([^"]+)";', (root / 'src/lib.rs').read_text()).group(1)
+    installer_name = 'janja-setup-windows.exe' if windows else 'janja-setup-linux.sh'
+    digests = {}
+    for path in [artifact, dist / installer_name]:
+        with path.open('rb') as stream:
+            digests[path.name] = hashlib.file_digest(stream, 'sha256').hexdigest()
+    (dist / ('windows.build.json' if windows else 'linux.build.json')).write_text(
+        json.dumps({'version': version, 'sha256': digests}, sort_keys=True))
     print("Teste este arquivo em outra máquina antes de distribuir.")
 
 if __name__ == "__main__":

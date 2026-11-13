@@ -102,6 +102,13 @@ impl Frame {
             );
             cr.scale(scale, scale);
             cr.set_source_surface(&self.surface, 0., 0.)?;
+            // Integer enlargement preserves sharp screen pixels; bilinear avoids costly area filtering.
+            cr.source()
+                .set_filter(if scale >= 1.0 && scale.fract() == 0.0 {
+                    gtk::cairo::Filter::Nearest
+                } else {
+                    gtk::cairo::Filter::Bilinear
+                });
             cr.paint()
         })();
         let restored = cr.restore();
@@ -111,6 +118,77 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fit_preserves_all_edges_on_wide_tall_and_standard_monitors() {
+        let mut source =
+            gtk::cairo::ImageSurface::create(gtk::cairo::Format::Rgb24, 32, 18).unwrap();
+        for (index, pixel) in source
+            .data()
+            .unwrap()
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
+            let (x, y) = (index % 32, index / 32);
+            let color = if x < 4 {
+                0xff0000u32
+            } else if x >= 28 {
+                0x0000ff
+            } else if y < 2 {
+                0xffff00
+            } else if y >= 16 {
+                0x00ffff
+            } else {
+                0x00ff00
+            };
+            pixel.copy_from_slice(&color.to_ne_bytes());
+        }
+        let frame = Frame { surface: source };
+        for (width, height) in [(320, 200), (192, 108), (344, 144), (180, 320)] {
+            let mut target =
+                gtk::cairo::ImageSurface::create(gtk::cairo::Format::Rgb24, width, height).unwrap();
+            let cr = gtk::cairo::Context::new(&target).unwrap();
+            cr.set_source_rgb(0., 0., 0.);
+            cr.paint().unwrap();
+            frame
+                .paint(&cr, width as f64, height as f64, false)
+                .unwrap();
+            drop(cr);
+            let scale = (width as f64 / 32.).min(height as f64 / 18.);
+            let (left, top) = (
+                (width as f64 - 32. * scale) / 2.,
+                (height as f64 - 18. * scale) / 2.,
+            );
+            let stride = target.stride() as usize;
+            let data = target.data().unwrap();
+            let pixel = |x: usize, y: usize| {
+                u32::from_ne_bytes(
+                    data[y * stride + x * 4..y * stride + x * 4 + 4]
+                        .try_into()
+                        .unwrap(),
+                ) & 0xffffff
+            };
+            for (x, y, color) in [
+                (2., 9., 0xff0000),
+                (30., 9., 0x0000ff),
+                (16., 1., 0xffff00),
+                (16., 17., 0x00ffff),
+            ] {
+                assert_eq!(
+                    pixel((left + x * scale) as usize, (top + y * scale) as usize),
+                    color,
+                    "Missing edge in {width}x{height}"
+                );
+            }
+            if left >= 2. {
+                assert_eq!(pixel(0, height as usize / 2), 0);
+            }
+            if top >= 2. {
+                assert_eq!(pixel(width as usize / 2, 0), 0);
+            }
+        }
+    }
     #[test]
     fn fullscreen_fills_viewport_without_letterboxing_or_stretching() {
         gst::init().unwrap();

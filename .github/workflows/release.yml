@@ -1,0 +1,51 @@
+name: Publicar versao assinada
+on:
+  workflow_dispatch:
+  push:
+    tags: ['20*-r*']
+permissions:
+  contents: read
+jobs:
+  build:
+    uses: ./.github/workflows/native.yml
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: janja-windows
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: janja-linux
+          path: dist
+      - name: Assinar metadados
+        env:
+          UPDATE_PRIVATE_KEY: ${{ secrets.JANJA_UPDATE_PRIVATE_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, subprocess
+          key = pathlib.Path(os.environ['RUNNER_TEMP']) / 'janja-update-private.pem'
+          secret = os.environ['UPDATE_PRIVATE_KEY']
+          if not secret:
+              raise SystemExit('Configure o secret JANJA_UPDATE_PRIVATE_KEY antes de publicar.')
+          try:
+              with open(os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as stream:
+                  stream.write(secret)
+              subprocess.run(['python3', 'scripts/release-manifest.py', '--private-key', str(key)], check=True)
+          finally:
+              key.unlink(missing_ok=True)
+          PY
+      - name: Publicar somente artefatos validados
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("dist/janja-update.json"))["version"])')
+          test "$(git rev-parse "refs/tags/$version^{commit}")" = "$(git rev-parse HEAD)"
+          gh release create "$version" --verify-tag --latest --title "Janja $version" --generate-notes dist/janja-windows.exe dist/janja-setup-windows.exe dist/janja-linux dist/janja-setup-linux.sh dist/janja-update.json dist/janja-update.json.sig
