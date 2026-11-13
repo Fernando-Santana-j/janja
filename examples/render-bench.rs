@@ -1,5 +1,5 @@
 //! Headless Cairo scaling benchmark; never linked into the distributed client.
-use gtk::cairo::{Context, Filter, Format, ImageSurface};
+use gtk::cairo::{Context, Extend, Filter, Format, ImageSurface};
 use std::time::Instant;
 
 fn main() {
@@ -29,13 +29,18 @@ fn main() {
         );
         cr.set_source_surface(&source, 0., 0.).unwrap();
         for repetition in 0..3 {
-            let filters = if repetition % 2 == 0 {
-                [Filter::Good, Filter::Bilinear, Filter::Nearest]
-            } else {
-                [Filter::Nearest, Filter::Bilinear, Filter::Good]
-            };
-            for filter in filters {
+            let mut filters = [
+                ("Good", Filter::Good, Extend::None),
+                ("Bilinear", Filter::Bilinear, Extend::None),
+                ("BilinearPad", Filter::Bilinear, Extend::Pad),
+                ("Nearest", Filter::Nearest, Extend::None),
+            ];
+            if repetition % 2 != 0 {
+                filters.reverse();
+            }
+            for (label, filter, extend) in filters {
                 cr.source().set_filter(filter);
+                cr.source().set_extend(extend);
                 cr.paint().unwrap();
                 let started = Instant::now();
                 for _ in 0..40 {
@@ -45,7 +50,7 @@ fn main() {
                     "{}",
                     serde_json::json!({
                         "source": [width, height], "target": [target_width, target_height],
-                        "filter": format!("{filter:?}"), "repetition": repetition,
+                        "filter": label, "repetition": repetition,
                         "ms_per_frame": started.elapsed().as_secs_f64() * 1000. / 40.,
                     })
                 );

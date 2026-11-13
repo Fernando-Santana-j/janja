@@ -165,6 +165,36 @@ class Updates(unittest.TestCase):
         with self.assertRaises(ValueError):
             published.verify(root, self.directory)
 
+    def test_local_publication_requires_the_exact_builds_scanned_by_defender(self):
+        version = '2026.11.13-r12-leve'
+        scans = []
+        for platform, names in [('linux', ['janja-linux', 'janja-setup-linux.sh']),
+                                ('windows', ['janja-windows.exe', 'janja-setup-windows.exe'])]:
+            digests = {}
+            for name in names:
+                (self.directory / name).write_bytes(b'validated build')
+                digests[name] = hashlib.sha256(b'validated build').hexdigest()
+                if platform == 'windows':
+                    scans.append({'file': name, 'sha256': digests[name]})
+            (self.directory / f'{platform}.build.json').write_text(json.dumps({'version': version, 'sha256': digests}))
+        report = {'authenticode': scans, 'defender': {'status': 'no_detection_in_scan', 'exit_code': 0}}
+        security = self.directory / 'windows-security.json'
+        security.write_text(json.dumps(report), encoding='utf-8-sig')
+        published.verify_builds(self.directory, version, self.directory)
+        (self.directory / 'janja-linux').write_bytes(b'modified build')
+        with self.assertRaises(ValueError):
+            published.verify_builds(self.directory, version, self.directory)
+        (self.directory / 'janja-linux').write_bytes(b'validated build')
+        for failure in ['not_scanned', 'wrong_hash']:
+            invalid = copy.deepcopy(report)
+            if failure == 'not_scanned':
+                invalid['defender']['status'] = 'not_scanned'
+            else:
+                invalid['authenticode'][0]['sha256'] = '0' * 64
+            security.write_text(json.dumps(invalid))
+            with self.subTest(failure=failure), self.assertRaises(ValueError):
+                published.verify_builds(self.directory, version, self.directory)
+
     def test_linux_installer_preserves_unknown_files_and_rejects_bad_binary(self):
         home = self.directory / 'Usuario com espacos'
         installed = home / '.local/share/janja'

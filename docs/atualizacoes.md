@@ -1,4 +1,4 @@
-# Instalação e atualizações — r12
+# Instalação e atualizações
 
 O cliente portátil continua independente. Os instaladores acrescentam um lançador
 que procura uma atualização no GitHub **antes** de abrir o aplicativo. Não há
@@ -26,36 +26,63 @@ nova versão: problemas de captura ou driver não são detectados por `--version
   instalados pelo gerenciador da distribuição quando faltarem. Nenhum deles
   permanece rodando com o cliente. Atualizações posteriores ocorrem na pasta do
   usuário, sem administrador. O binário deve ser compilado numa distribuição
-  compatível com a glibc de destino; o CI usa Ubuntu 24.04.
+  compatível com a glibc de destino; o CI usa Ubuntu 24.04. **Os pacotes locais r12/r13 foram gerados no Arch Linux e incluem
+  bibliotecas que exigem glibc 2.44**;
+  ele não deve ser apresentado como compatível com Ubuntu 24.04.
 
-Quem usa uma versão anterior precisa instalar a r12 uma vez. Copiar apenas o
+Quem usa o portátil r11 ou anterior precisa instalar a versão nova uma vez. Copiar apenas o
 portátil não instala o atualizador. Os portáteis continuam disponíveis para quem
 prefere controlar manualmente as atualizações.
 
-## Publicar com um comando
+## Publicar com um comando, sem Actions
 
-A publicação está autorizada pelo responsável. No terminal Linux do projeto:
+O Actions desta conta bloqueou a compilação por uma questão de cobrança antes
+mesmo de iniciar os jobs. Use o fluxo local, que não executa compilação no GitHub:
 
 ```bash
-bash scripts/publish-release.sh
+bash scripts/publish-release.sh --local
 ```
 
-O comando autentica no GitHub quando necessário, verifica o repositório público,
-valida a chave original e executa os testes Windows pelo SSH configurado. Depois
-configura o secret, prepara o commit dos arquivos do projeto, envia `main` e a tag
-da versão e acompanha o workflow. Uma falha anterior ao envio interrompe a
-publicação. O código é recompilado e testado pelo GitHub antes da Release.
+O comando autentica no GitHub, executa os testes Linux e WebRTC, gera o pacote
+Linux e usa o SSH já configurado para compilar e validar o Windows. A validação
+Windows inclui mídia, carga sintética, atualização, rollback, instalador real e
+Defender. Só depois prepara o commit, envia `main` e a tag da versão.
 
-Ao terminar, o comando baixa os instaladores publicados e confere assinatura,
-versão, tamanho e SHA-256. O endereço e a lista de arquivos ficam em
-`dist/publicacao.json`; o andamento fica em `dist/publicacao.log`. Não é necessário
-comprar certificado para esse fluxo. Alertas de reputação do Windows ainda podem
-ocorrer.
+A publicação verifica os hashes dos quatro pacotes e exige que os executáveis
+Windows correspondam exatamente à análise aprovada do Defender. Assina o
+manifesto com a chave original, envia os seis arquivos para um rascunho, baixa e
+confere os arquivos enviados e só então torna a Release pública. Não envia os
+executáveis de diagnóstico nem a chave privada.
 
-Para a próxima versão, altere `BUILD` em `src/lib.rs` para uma revisão maior e
-execute o mesmo comando. Ele não substitui tags já existentes. Se uma execução do
-GitHub falhar depois de enviar a tag, corrija a falha antes de decidir entre
-reexecutar o workflow ou criar uma revisão nova; não mova uma tag publicada.
+Se ocorrer uma falha depois de enviar a tag, execute o mesmo comando novamente:
+ele pode retomar o rascunho usando os pacotes validados. Uma Release pública não
+é sobrescrita. O andamento fica em `dist/publicacao.log`; o endereço final fica
+em `dist/publicacao.json`. O workflow disparado pela tag pode aparecer como
+bloqueado no Actions; ele não é utilizado pelo fluxo local.
+
+Para a próxima atualização, incremente o número `r` em `src/lib.rs`, por exemplo
+para `2026.11.14-r14-leve`, e execute o mesmo comando. Preserve a chave de assinatura
+e nunca mova uma tag publicada. Fazer upload apenas do código não atualiza os
+usuários: a atualização depende dos instaladores e do manifesto na Release.
+
+Se o Actions voltar a estar disponível, `bash scripts/publish-release.sh` usa a
+compilação e os testes do GitHub em Ubuntu 24.04 e Windows. O fluxo local mantém
+a compatibilidade da distribuição Linux em que os pacotes foram compilados;
+não cria automaticamente um pacote compatível com glibc mais antiga.
+
+## Mudanças desde a r11 de 12/11
+
+- Tela cheia mostra a imagem inteira por padrão, sem cortar as bordas.
+- Opção de preenchimento deixa claro quando haverá corte.
+- Filtros de renderização mais leves, com medições antes e depois.
+- A r13 reduz o custo de ampliação bilinear, incluindo escala de tela alta,
+  preservando as bordas e as faixas pretas.
+- Menos instrumentação e cálculo de medição no cliente comum; diagnóstico separado.
+- Correção das opções do encoder AMD AMF para evitar rejeição e fallback indevido.
+- Instaladores Windows/Linux com atualização assinada ao abrir pelos atalhos.
+- Recuperação da instalação anterior quando uma atualização falha.
+- Testes de mídia, áudio, perdas, carga sintética, instalação e segurança ampliados.
+- Publicação pelo GitHub com alternativa local sem Actions.
 
 ## Chave de publicação
 
@@ -79,58 +106,6 @@ esse acesso anônimo; não coloque tokens pessoais dentro do aplicativo.
 
 Não execute novamente `create-update-key.py` para cada versão: os aplicativos
 instalados confiam na chave original. O script recusa sobrescrevê-la.
-
-## Primeira publicação da r12
-
-Estes comandos enviam código e publicam a versão para os usuários. Execute-os
-depois de revisar os arquivos e concluir a validação Windows. A branch deste
-projeto é `main`.
-
-```bash
-git add Cargo.toml Cargo.lock build.rs src scripts assets .github README.md .gitignore docs/atualizacoes.md docs/plano-r12.md docs/medicoes-20261113.json
-git diff --cached --stat
-git commit -m "Prepara Janja r12 com instaladores e atualizacoes assinadas"
-git push origin main
-git tag 2026.11.13-r12-leve
-git push origin 2026.11.13-r12-leve
-gh run list --workflow release.yml --limit 5
-gh run watch
-```
-
-Selecione a execução da tag r12 ao acompanhar o workflow. Somente após ele
-terminar com sucesso, confira a Release:
-
-```bash
-gh release view 2026.11.13-r12-leve --repo Fernando-Santana-j/janja
-```
-
-Ela deve conter `janja-setup-windows.exe`, `janja-setup-linux.sh`, os dois
-portáteis, `janja-update.json` e `janja-update.json.sig`. A instalação inicial é
-uma vez por computador; os atalhos instalados verificam as próximas versões.
-
-## Publicar as próximas atualizações
-
-1. Faça a alteração e incremente `src/lib.rs`, por exemplo para
-   `2026.11.14-r13-leve`. O número depois de `r` deve sempre aumentar.
-2. Revise, teste, faça commit e envie para `main`. Preserve a chave original.
-3. Crie e envie a tag correspondente ao mesmo commit:
-
-```bash
-git push origin main
-git tag 2026.11.14-r13-leve
-git push origin 2026.11.14-r13-leve
-gh run list --workflow release.yml --limit 5
-gh run watch
-```
-
-O workflow `Publicar versao assinada` compila Windows/Linux, executa os testes,
-gera os instaladores e assina os metadados antes de criar a Release. Ele verifica
-se os artefatos pertencem à versão esperada e se a tag corresponde ao commit
-compilado. Não publica executáveis de diagnóstico nem a chave privada.
-
-Fazer upload do código ou criar uma tag sem os artefatos não atualiza os usuários.
-Para reverter um problema já publicado, publique o código corrigido com uma
-revisão maior; não tente reutilizar uma revisão antiga.
 
 ## Validar antes da primeira publicação
 

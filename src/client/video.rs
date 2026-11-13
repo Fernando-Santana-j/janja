@@ -101,7 +101,11 @@ impl Frame {
                 (height - self.height() as f64 * scale) / 2.,
             );
             cr.scale(scale, scale);
+            // Clamping enables opaque bilinear scaling; clip so edges never fill the letterbox.
+            cr.rectangle(0., 0., self.width() as f64, self.height() as f64);
+            cr.clip();
             cr.set_source_surface(&self.surface, 0., 0.)?;
+            cr.source().set_extend(gtk::cairo::Extend::Pad);
             // Integer enlargement preserves sharp screen pixels; bilinear avoids costly area filtering.
             cr.source()
                 .set_filter(if scale >= 1.0 && scale.fract() == 0.0 {
@@ -145,9 +149,22 @@ mod tests {
             pixel.copy_from_slice(&color.to_ne_bytes());
         }
         let frame = Frame { surface: source };
-        for (width, height) in [(320, 200), (192, 108), (344, 144), (180, 320)] {
-            let mut target =
-                gtk::cairo::ImageSurface::create(gtk::cairo::Format::Rgb24, width, height).unwrap();
+        for (width, height, device_scale) in [
+            (320, 200, 1),
+            (192, 108, 1),
+            (344, 144, 1),
+            (180, 320, 1),
+            (320, 200, 2),
+            (180, 320, 2),
+        ] {
+            let (physical_width, physical_height) = (width * device_scale, height * device_scale);
+            let mut target = gtk::cairo::ImageSurface::create(
+                gtk::cairo::Format::Rgb24,
+                physical_width,
+                physical_height,
+            )
+            .unwrap();
+            target.set_device_scale(device_scale as f64, device_scale as f64);
             let cr = gtk::cairo::Context::new(&target).unwrap();
             cr.set_source_rgb(0., 0., 0.);
             cr.paint().unwrap();
@@ -155,6 +172,7 @@ mod tests {
                 .paint(&cr, width as f64, height as f64, false)
                 .unwrap();
             drop(cr);
+            let (width, height) = (physical_width, physical_height);
             let scale = (width as f64 / 32.).min(height as f64 / 18.);
             let (left, top) = (
                 (width as f64 - 32. * scale) / 2.,

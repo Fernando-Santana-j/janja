@@ -2053,15 +2053,20 @@ mod tests {
 
     #[test]
     fn audio_jitter_tolerates_reordering_and_conceals_one_lost_packet() {
-        audio_jitter_case(false);
+        audio_jitter_case(false, false);
     }
     #[test]
     fn audio_jitter_recovers_when_loss_notice_is_evicted() {
-        audio_jitter_case(true);
+        audio_jitter_case(true, false);
     }
-    fn audio_jitter_case(discard_loss_notice: bool) {
+    #[test]
+    fn audio_jitter_conceals_actual_losses_when_queue_evicts_a_packet() {
+        audio_jitter_case(true, true);
+    }
+    fn audio_jitter_case(discard_loss_notice: bool, evict_packet: bool) {
         gst::init().unwrap();
-        let source = pipeline(&format!("audiotestsrc num-buffers=60 samplesperbuffer=480 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! {AUDIO_ENCODER} ! rtpopuspay ! appsink name=packets sync=false")).unwrap();
+        // Cross the sequence-number wrap during every replay.
+        let source = pipeline(&format!("audiotestsrc num-buffers=60 samplesperbuffer=480 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! {AUDIO_ENCODER} ! rtpopuspay seqnum-offset=65520 ! appsink name=packets sync=false")).unwrap();
         let packets = source
             .get_by_name("packets")
             .unwrap()
@@ -2073,7 +2078,7 @@ mod tests {
             samples.push(sample);
         }
         source.set_state(gst::State::Null).unwrap();
-        assert!(samples.len() >= 25);
+        assert!(samples.len() >= 50);
         let (tx, _rx) = std::sync::mpsc::sync_channel(32);
         let peer = Peer::with_output(1, 2, 1, false, true, tx, true).unwrap();
         assert_eq!(
@@ -2118,6 +2123,30 @@ mod tests {
             .downcast::<gst_app::AppSrc>()
             .unwrap();
         configure_receiver_element(&p.get_by_name("jitter").unwrap());
+        let delivered = Arc::new(Mutex::new(Vec::<u16>::with_capacity(samples.len())));
+        let observed = delivered.clone();
+        let pause_after = samples.len() * 2 / 3 - 1;
+        p.get_by_name("jitter")
+            .unwrap()
+            .get_static_pad("src")
+            .unwrap()
+            .add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+                if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data
+                    && let Ok(bytes) = buffer.map_readable()
+                    && let Some(sequence) = bytes.as_slice().get(2..4)
+                {
+                    let pause = {
+                        let mut packets = observed.lock().unwrap();
+                        packets.push(u16::from_be_bytes([sequence[0], sequence[1]]));
+                        evict_packet && packets.len() == pause_after
+                    };
+                    if pause {
+                        // Exercise bounded-queue eviction independently of the simulated network loss.
+                        std::thread::sleep(Duration::from_millis(160));
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
         app.set_caps(samples[0].get_caps().map(|c| c.to_owned()).as_ref());
         p.set_state(gst::State::Playing).unwrap();
         let start = std::time::Instant::now();
@@ -2182,9 +2211,43 @@ mod tests {
             Some(1),
             "A packet delayed by 90 ms caused extra audio loss: {stats}"
         );
+        let delivered = delivered.lock().unwrap();
+        assert_eq!(
+            stats.get::<u64>("num-pushed").unwrap(),
+            Some(delivered.len() as u64)
+        );
+        let delayed_buffer = samples[delayed]
+            .get_buffer()
+            .unwrap()
+            .map_readable()
+            .unwrap();
+        let sequence = &delayed_buffer.as_slice()[2..4];
         assert!(
-            (360..=600).contains(&decoded.get::<u64>("plc-num-samples").unwrap().unwrap()),
-            "One 10 ms loss must be concealed once, including timestamp rounding: {decoded}"
+            delivered.contains(&u16::from_be_bytes([sequence[0], sequence[1]])),
+            "The reordered packet must reach the decoder"
+        );
+        let mut missing = 0u64;
+        for pair in delivered.windows(2) {
+            let advance = pair[1].wrapping_sub(pair[0]);
+            assert!(
+                (1..=samples.len() as u16).contains(&advance),
+                "RTP output was duplicated or not reordered: {delivered:?}"
+            );
+            missing += u64::from(advance - 1);
+        }
+        assert!(missing >= 1);
+        if evict_packet {
+            assert!(
+                missing > 1,
+                "The forced stall did not exercise queue eviction"
+            );
+        }
+        // Deadline loss stats exclude queue evictions; conceal exactly the holes that reached the decoder.
+        let expected_samples = missing * 480;
+        assert!(
+            (expected_samples.saturating_sub(120)..=expected_samples + 120)
+                .contains(&decoded.get::<u64>("plc-num-samples").unwrap().unwrap()),
+            "Concealment must match {missing} missing 10 ms packets, including timestamp rounding: {decoded}; RTP: {stats}"
         );
     }
     #[test]

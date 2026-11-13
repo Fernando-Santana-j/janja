@@ -27,9 +27,36 @@ def verify(root, directory):
     return metadata
 
 
+def verify_builds(directory, version, validated):
+    windows = {}
+    for platform, names in [('linux', ['janja-linux', 'janja-setup-linux.sh']),
+                            ('windows', ['janja-windows.exe', 'janja-setup-windows.exe'])]:
+        stamp = json.loads((validated / f'{platform}.build.json').read_text())
+        if stamp.get('version') != version:
+            raise ValueError('O pacote local pertence a outra versao')
+        for name in names:
+            digest = stamp['sha256'][name]
+            path = directory / name
+            size = path.stat().st_size
+            if not re.fullmatch(r'[a-f0-9]{64}', digest) or not 0 < size <= update.LIMIT:
+                raise ValueError('Pacote local invalido')
+            update.verify_file(path, {'size': size, 'sha256': digest})
+            if platform == 'windows':
+                windows[name] = digest
+    report = json.loads((validated / 'windows-security.json').read_text(encoding='utf-8-sig'))
+    scans = report['authenticode']
+    if (report['defender'].get('status') != 'no_detection_in_scan' or report['defender'].get('exit_code') != 0
+            or len(scans) != 2 or {scan['file']: scan['sha256'] for scan in scans} != windows):
+        raise ValueError('O Defender nao aprovou os arquivos exatos desta publicacao')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--directory', type=Path, default=Path('dist'))
+    parser.add_argument('--validated-builds', type=Path,
+                        help='conferir tambem portateis e hashes da analise local do Defender')
     args = parser.parse_args()
     metadata = verify(Path(__file__).resolve().parent.parent, args.directory)
+    if args.validated_builds:
+        verify_builds(args.directory, metadata['version'], args.validated_builds)
     print('Assinatura, identidade e ambos os instaladores conferidos:', metadata['version'])

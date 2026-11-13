@@ -3,8 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mode=${1-}
-if [ "$#" -gt 1 ] || { [ -n "$mode" ] && [ "$mode" != '--distribution-only' ] && [ "$mode" != '--inspect' ]; }; then
-    echo 'Uso: bash scripts/test-windows-from-linux.sh [--distribution-only|--inspect]' >&2
+if [ "$#" -gt 1 ] || { [ -n "$mode" ] && [ "$mode" != '--distribution-only' ] && [ "$mode" != '--inspect' ] && [ "$mode" != '--audio-test' ]; }; then
+    echo 'Uso: bash scripts/test-windows-from-linux.sh [--distribution-only|--inspect|--audio-test]' >&2
     exit 2
 fi
 ssh_key=/home/fernando/.ssh/windows_caixa
@@ -17,6 +17,12 @@ fi
 trap 'if "$started_agent"; then ssh-agent -k >/dev/null; fi' EXIT
 ssh-add "$ssh_key"
 ssh_options=(-F /dev/null -i "$ssh_key" -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30)
+if [ "$mode" = '--audio-test' ]; then
+    scp "${ssh_options[@]}" scripts/diagnose-audio-windows.ps1 "$remote:"
+    ssh "${ssh_options[@]}" "$remote" 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:/Users/Caixa/diagnose-audio-windows.ps1' 2>&1 | tee dist/windows-audio-debug.log
+    scp "${ssh_options[@]}" "$remote:Downloads/windows-audio-debug.zip" dist/windows-audio-debug.zip
+    exit
+fi
 if [ "$mode" = '--inspect' ]; then
     scp "${ssh_options[@]}" scripts/inspect-windows-validation.ps1 "$remote:"
     ssh "${ssh_options[@]}" "$remote" 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:/Users/Caixa/inspect-windows-validation.ps1' 2>&1 | tee dist/windows-inspection.log

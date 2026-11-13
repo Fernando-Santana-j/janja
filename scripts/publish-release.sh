@@ -2,6 +2,9 @@
 # Run from the owner's terminal: validates, commits and publishes the current BUILD.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+local_publish=false
+if [[ "${1-}" == --local ]]; then local_publish=true; shift; fi
+[[ "$#" -eq 0 ]] || { echo 'Uso: bash scripts/publish-release.sh [--local]' >&2; exit 2; }
 for program in gh git python3 openssl cargo ssh scp ssh-add; do
     command -v "$program" >/dev/null || { echo "Comando necessario: $program" >&2; exit 1; }
 done
@@ -10,6 +13,7 @@ if ! gh auth status --hostname github.com >/dev/null 2>&1; then
 fi
 mkdir -p dist
 exec > >(tee -a dist/publicacao.log) 2>&1
+export JANJA_PUBLICATION_LOGGED=1
 repo=Fernando-Santana-j/janja
 phase='verificar repositorio'
 trap 'echo "Publicacao interrompida na etapa: $phase. Consulte dist/publicacao.log." >&2' ERR
@@ -29,6 +33,7 @@ git merge-base --is-ancestor origin/main HEAD || {
     echo 'A branch remota tem alteracoes novas. Integre-as e valide antes de publicar.' >&2; exit 1;
 }
 if git rev-parse --verify "refs/tags/$version" >/dev/null 2>&1; then
+    if "$local_publish"; then exec bash scripts/publish-local-release.sh; fi
     echo "A tag $version ja existe. Para uma nova atualizacao, incremente BUILD; nao reutilize a tag." >&2
     exit 1
 fi
@@ -44,7 +49,14 @@ openssl dgst -sha256 -verify assets/update-public.pem -signature "$temporary/sig
 phase='validar atualizador e cliente Windows'
 python3 scripts/test-updates.py
 cargo fmt --all -- --check
-bash scripts/test-windows-from-linux.sh --distribution-only
+if "$local_publish"; then
+    cargo test --locked --features native,portable -- --test-threads=1
+    cargo test --locked --features native actual_webrtc_loopback -- --ignored --test-threads=1
+    python3 scripts/package-native.py --diagnostics
+    bash scripts/test-windows-from-linux.sh
+else
+    bash scripts/test-windows-from-linux.sh --distribution-only
+fi
 phase='preparar commit revisavel'
 git add -- Cargo.toml Cargo.lock build.rs src scripts assets examples .github README.md .gitignore docs/atualizacoes.md docs/plano-r12.md docs/medicoes-20261113.json
 if git grep --cached -I -l -E '^-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'; then
@@ -64,6 +76,7 @@ commit=$(git rev-parse HEAD)
 git_auth push origin main
 git tag "$version"
 git_auth push origin "refs/tags/$version"
+if "$local_publish"; then exec bash scripts/publish-local-release.sh; fi
 phase='aguardar compilacao e testes no GitHub'
 run_id=''
 for attempt in {1..24}; do

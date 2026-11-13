@@ -1052,5 +1052,231 @@
       "video_frames": 1886,
       "width": 1920
     }
+  },
+  "distribution_validation_20261113": {
+    "windows_real_install_update_reinstall_uninstall": "passed",
+    "windows_defender": "no_detection_in_scan",
+    "windows_defender_report": {
+      "authenticode": [
+        {
+          "publisher": null,
+          "status": "NotSigned",
+          "sha256": "cd01cbaa392a14dd591c8cecfcd64cb540f2a3200ace189882f6a4271299ae45",
+          "file": "janja-windows.exe"
+        },
+        {
+          "publisher": null,
+          "status": "NotSigned",
+          "sha256": "e80202441ca794eb7db8f59187c021e72513dc489d065cd472fe34b8c84bbf9d",
+          "file": "janja-setup-windows.exe"
+        }
+      ],
+      "note": "A scan is limited to these artifacts and the installed Defender definitions. It does not measure SmartScreen or browser reputation.",
+      "defender": {
+        "engine_version": "1.1.26100.4",
+        "signature_version": "1.463.279.0",
+        "signature_updated_utc": "2026-11-13T04:31:12.0000000Z",
+        "status": "no_detection_in_scan",
+        "exit_code": 0
+      }
+    },
+    "github_actions": "blocked before jobs by account billing issue; run 43471473718",
+    "local_publication": "prepared; not yet confirmed public",
+    "linux_local_glibc_requirement": "2.44; bundled libraries inspected; not an Ubuntu 24.04 build",
+    "windows_short_network_report": {
+      "audio_buffers": 613,
+      "audio_peak": 0.054107666015625,
+      "capture_min_latency_ms": 0.0,
+      "display": "1920x1080 BGRx",
+      "encoded_fps": 29.904600337642876,
+      "encoder": "amfh264enc",
+      "encoder_input_fps": 30.236873674727796,
+      "height": 1080,
+      "loss_recovery": null,
+      "maximum_audio_gap_ms": 188,
+      "maximum_video_gap_ms": 363,
+      "measurement_seconds": 3.0095704,
+      "preview": false,
+      "raw_fps": 30.236873674727796,
+      "received_fps": 29.904600337642876,
+      "receiver_min_latency_ms": 88.0,
+      "seconds_including_negotiation": 6.5936805,
+      "test": "webrtc-loopback",
+      "video_frames": 180,
+      "width": 1920
+    },
+    "gap_limitation": "Maximum gaps include startup/negotiation; these are not screen-to-screen latency measurements."
+  },
+  "r13_final_review": {
+    "build": "2026.11.13-r13-leve",
+    "baseline": "2026.11.13-r12-leve@3cd917f",
+    "method": "Actual Frame::paint, optimized Rust harness, headless Cairo image surface; five alternating repeats, 30 paints each.",
+    "change": "Clamp source pattern with Extend::Pad and clip to source rectangle; same filter choice, no extra frame buffer.",
+    "measurements": {
+      "scale_1x": [
+        {
+          "source": [
+            1920,
+            1080
+          ],
+          "logical_target": [
+            2560,
+            1440
+          ],
+          "before_ms": [
+            25.5150168,
+            27.2425405,
+            25.256931333333334,
+            24.822793966666666,
+            24.70075286666667
+          ],
+          "after_ms": [
+            3.8512444666666665,
+            3.9544633,
+            3.4798225,
+            3.6390775,
+            3.4537878666666666
+          ],
+          "median_before_ms": 25.256931333333334,
+          "median_after_ms": 3.6390775
+        },
+        {
+          "source": [
+            1920,
+            1080
+          ],
+          "logical_target": [
+            1280,
+            720
+          ],
+          "before_ms": [
+            0.9041384,
+            0.8903400333333332,
+            0.8767209333333333,
+            0.8740390333333334,
+            0.8656510666666667
+          ],
+          "after_ms": [
+            0.8707774333333334,
+            0.8744837,
+            0.9190193000000001,
+            0.8735128666666667,
+            0.8727236666666667
+          ],
+          "median_before_ms": 0.8767209333333333,
+          "median_after_ms": 0.8735128666666667
+        },
+        {
+          "source": [
+            1920,
+            1080
+          ],
+          "logical_target": [
+            3840,
+            2160
+          ],
+          "before_ms": [
+            4.551170866666667,
+            4.381949466666667,
+            4.561770466666667,
+            4.4387259666666665,
+            4.633819033333333
+          ],
+          "after_ms": [
+            4.409180666666667,
+            4.451572166666667,
+            4.6690401,
+            4.690660733333333,
+            4.4080748666666665
+          ],
+          "median_before_ms": 4.551170866666667,
+          "median_after_ms": 4.451572166666667
+        },
+        {
+          "source": [
+            3840,
+            2160
+          ],
+          "logical_target": [
+            960,
+            540
+          ],
+          "before_ms": [
+            0.9890540666666667,
+            0.9250326666666667,
+            0.9366053999999999,
+            0.9460666,
+            1.1058384666666667
+          ],
+          "after_ms": [
+            0.9775534999999999,
+            1.1285625666666665,
+            0.9961918666666667,
+            0.9633756666666666,
+            0.9498636666666667
+          ],
+          "median_before_ms": 0.9460666,
+          "median_after_ms": 0.9775534999999999
+        }
+      ],
+      "scale_2x": [
+        {
+          "source": [
+            1920,
+            1080
+          ],
+          "logical_target": [
+            1280,
+            720
+          ],
+          "before_ms": [
+            24.895263533333335,
+            25.050074333333335,
+            24.8444538,
+            24.878580733333333,
+            25.025741533333335
+          ],
+          "after_ms": [
+            3.464832133333333,
+            3.545082366666667,
+            3.4324069999999995,
+            3.436467133333333,
+            3.4307727
+          ],
+          "median_before_ms": 24.895263533333335,
+          "median_after_ms": 3.436467133333333
+        }
+      ]
+    },
+    "regression_guard": "Original frame tests pass including source lifetime, stride, fill/fit and letterbox; device scale 2x added. A temporary mutation removing the source clip fails the letterbox assertion.",
+    "local_rust": "93 tests passed; five ignored; blocked TCP and private D-Bus tests filtered in sandbox; fmt and clippy passed.",
+    "local_linux_package": "built and synthetic encoder/audio self-test passed",
+    "windows": "r13 full validation stopped before publication by an audio jitter test assertion; updated assertion awaits Windows verification",
+    "publication": "not yet confirmed; local publication replaces unavailable Actions",
+    "limitations": [
+      "Paint time is not total application CPU or network latency.",
+      "No real game or physical audio-device measurements.",
+      "Packaged Linux libraries require glibc 2.44."
+    ],
+    "audio_jitter_regression": {
+      "reported_windows": {
+        "network_deadline_loss": 1,
+        "decoder_packets": 59,
+        "plc_samples": 960,
+        "plc_ms": 20
+      },
+      "controlled_reproduction": {
+        "jitter_output_stall_ms": 120,
+        "network_deadline_loss": 1,
+        "actual_rtp_holes": 2,
+        "decoder_packets": 59,
+        "plc_samples": 960
+      },
+      "finding": "A bounded jitterbuffer can evict a packet without incrementing deadline-loss stats. The test assumed exactly one missing packet; production correctly concealed two in the controlled reproduction. Windows trace is still needed to confirm the original execution.",
+      "test_change": "Observe actual RTP sequence holes, require the reordered packet to arrive, cross sequence wrap, and require PLC to match actual missing samples within the original rounding tolerance.",
+      "additional_case": "A forced 160 ms jitter output pause must exercise packet eviction and recovery after the loss notice is dropped.",
+      "verification": "Three audio cases passed in 20 repetitions (60 case executions). A temporary mutation doubling the recovery gap fails: one real missing packet expects 480 samples, not 960.",
+      "production_audio_code": "unchanged"
+    }
   }
 }
