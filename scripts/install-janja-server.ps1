@@ -40,14 +40,19 @@ $action = New-ScheduledTaskAction -Execute $destination -WorkingDirectory $direc
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $account = New-ScheduledTaskPrincipal -UserId 'S-1-5-19' -LogonType ServiceAccount
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$state = Join-Path $directory 'state'
+New-Item -ItemType Directory -Path $state -Force | Out-Null
+# The service can update its private cache without write access to the executable directory.
+& icacls.exe $state /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-19:(OI)(CI)M' /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Nao foi possivel preparar o cache privado do servidor.' }
 Register-ScheduledTask -TaskName 'Janja-Servidor' -Action $action -Trigger $trigger -Principal $account -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName 'Janja-Servidor'
 for ($attempt = 0; $attempt -lt 15; $attempt++) {
     try {
         $health = Invoke-RestMethod 'http://127.0.0.1:8787/janja/health' -TimeoutSec 2
-        if ($health.status -eq 'ok' -and $health.service -eq 'janja-signaling' -and $health.protocol -eq 2 -and $health.passwordOptional -eq $true) {
+        if ($health.status -eq 'ok' -and $health.service -eq 'janja-signaling' -and $health.protocol -eq 2 -and $health.passwordOptional -eq $true -and $health.sessionRecovery -eq $true -and $health.sessionCacheHealthy -eq $true) {
             if ($MasterPasswordFile -and $health.masterPasswordConfigured -ne $true) { throw 'Senha mestra nao foi carregada pelo servidor.' }
-            Write-Host 'Janja pronto (protocolo 2). Inicia com o Windows e permanece ativo ao sair do SSH.'
+            Write-Host 'Janja pronto, com retomada de sessoes e cache privado. Inicia com o Windows e permanece ativo ao sair do SSH.'
             exit 0
         }
     } catch {}

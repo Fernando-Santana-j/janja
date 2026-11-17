@@ -56,10 +56,13 @@ impl AudioLevel {
         }
     }
 }
-fn watch_audio(pad: &gst::Pad, level: Arc<AudioLevel>) {
+fn watch_audio(pad: &gst::Pad, level: Arc<AudioLevel>, progress: Option<Arc<AtomicU64>>) {
     pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
         if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data {
             level.observe(buffer);
+            if let Some(progress) = &progress {
+                progress.fetch_add(1, Ordering::Relaxed);
+            }
         }
         gst::PadProbeReturn::Ok
     });
@@ -98,10 +101,12 @@ fn pipeline(text: &str) -> Result<gst::Pipeline, String> {
 fn pipe_error(p: &gst::Pipeline) -> Option<String> {
     let bus = p.get_bus()?;
     let mut latency_changed = false;
+    let mut clock_lost = false;
     let mut error = None;
     while let Some(message) = bus.pop() {
         match message.view() {
             gst::MessageView::Latency(_) => latency_changed = true,
+            gst::MessageView::ClockLost(_) => clock_lost = true,
             gst::MessageView::Error(e) => {
                 error = Some(format!(
                     "{}: {} ({})",
@@ -116,6 +121,15 @@ fn pipe_error(p: &gst::Pipeline) -> Option<String> {
                 error.get_or_insert_with(|| "A fonte de mídia foi encerrada".into());
             }
             _ => (),
+        }
+    }
+    if clock_lost && error.is_none() {
+        // GStreamer requires a PAUSED/PLAYING transition to redistribute a lost clock.
+        if p.set_state(gst::State::Paused)
+            .and_then(|_| p.set_state(gst::State::Playing))
+            .is_err()
+        {
+            error = Some("Não foi possível recuperar o relógio de áudio/vídeo".into());
         }
     }
     if latency_changed && error.is_none() {
@@ -550,7 +564,7 @@ impl Capture {
             Ok(capture)
         }
     }
-    fn start(s: &Settings, source: &str, audio: &str) -> Result<Self, String> {
+    pub(super) fn start(s: &Settings, source: &str, audio: &str) -> Result<Self, String> {
         Self::start_encoders(s, source, audio, encoders(s))
     }
     fn start_encoders(
@@ -687,6 +701,7 @@ impl Capture {
                         .get_static_pad("src")
                         .unwrap(),
                     capture.audio_level.clone(),
+                    None,
                 );
                 attach(
                     &capture.pipeline,
@@ -1056,7 +1071,9 @@ pub struct Peer {
     view: Option<u64>,
     volume: Arc<Mutex<u8>>,
     pub video_frames: Arc<AtomicU64>,
+    video_packets: Arc<AtomicU64>,
     pub audio_frames: Arc<AtomicU64>,
+    audio_packets: Arc<AtomicU64>,
     audio_level: Arc<AudioLevel>,
     pub session: Option<String>,
     pub remote_ready: bool,
@@ -1065,6 +1082,7 @@ pub struct Peer {
     stats_pending: Arc<AtomicBool>,
     pub pending: Vec<(u32, String, Option<String>)>,
     pub created: std::time::Instant,
+    progress: Mutex<super::recovery::Progress>,
 }
 impl Peer {
     pub fn new(
@@ -1077,7 +1095,7 @@ impl Peer {
     ) -> Result<Self, String> {
         Self::with_output(epoch, to, stream, sending, audio, tx, false)
     }
-    fn with_output(
+    pub(super) fn with_output(
         epoch: u64,
         to: u64,
         stream: u64,
@@ -1090,7 +1108,9 @@ impl Peer {
         let generation = NEXT.fetch_add(1, Ordering::Relaxed);
         let volume = Arc::new(Mutex::new(100));
         let video_frames = Arc::new(AtomicU64::new(0));
+        let video_packets = Arc::new(AtomicU64::new(0));
         let audio_frames = Arc::new(AtomicU64::new(0));
+        let audio_packets = Arc::new(AtomicU64::new(0));
         let audio_level = Arc::new(AudioLevel::default());
         let app = |name: &str, chain: &str| {
             let limits = if name == "a" {
@@ -1172,7 +1192,9 @@ impl Peer {
             let weak = p.downgrade();
             let gain = volume.clone();
             let video_count = video_frames.clone();
+            let incoming_video = video_packets.clone();
             let audio_count = audio_frames.clone();
+            let incoming_audio = audio_packets.clone();
             let audio_signal = audio_level.clone();
             rtc.connect_pad_added(move |_, pad| {
                 if pad.get_direction() != gst::PadDirection::Src {
@@ -1193,6 +1215,13 @@ impl Peer {
                         .get::<String>("media")
                         .map_err(|e| e.to_string())?;
                     let bin = receive_bin(media.as_deref().unwrap_or(""), headless)?;
+                    {
+                        let packets = if media.as_deref() == Some("video") { incoming_video.clone() } else { incoming_audio.clone() };
+                        pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+                            packets.fetch_add(1, Ordering::Relaxed);
+                            gst::PadProbeReturn::Ok
+                        });
+                    }
                     let (meter, count) = if media.as_deref() == Some("video") {
                         ("video_meter", video_count.clone())
                     } else {
@@ -1200,14 +1229,14 @@ impl Peer {
                     };
                     if let Some(element) = bin.get_by_name(meter) {
                         if media.as_deref() == Some("audio") {
-                            watch_audio(&element.get_static_pad("src").ok_or("Medidor de áudio sem saída")?, audio_signal.clone());
+                            watch_audio(&element.get_static_pad("src").ok_or("Medidor de áudio sem saída")?, audio_signal.clone(), Some(audio_count.clone()));
                         }
                         #[cfg(any(test, feature = "diagnostics"))]
                         if let Some(pad) = element.get_static_pad("src") {
                             self::meter(&pad, "receiver-output", Arc::default(), None);
                         }
                         // Decoded video count also guards the 30-second startup timeout.
-                        if media.as_deref() == Some("video") || cfg!(any(test, feature = "diagnostics")) {
+                        if media.as_deref() == Some("video") {
                             element
                                 .connect("handoff", false, move |_| {
                                     count.fetch_add(1, Ordering::Relaxed);
@@ -1253,7 +1282,9 @@ impl Peer {
             view: (!sending && !headless).then_some(stream),
             volume,
             video_frames,
+            video_packets,
             audio_frames,
+            audio_packets,
             audio_level,
             session: sending.then(|| format!("native-v2-{epoch}-{stream}-{generation}")),
             remote_ready: false,
@@ -1262,6 +1293,7 @@ impl Peer {
             stats_pending: Arc::default(),
             pending: vec![],
             created: std::time::Instant::now(),
+            progress: Mutex::new(super::recovery::Progress::new(std::time::Instant::now())),
         };
         peer.pipeline
             .set_state(gst::State::Playing)
@@ -1355,6 +1387,9 @@ impl Peer {
         }
         Ok(())
     }
+    pub fn volume(&self) -> u8 {
+        *self.volume.lock().unwrap()
+    }
     pub fn audio_status(&self) -> &'static str {
         let status = self.audio_level.status();
         if *self.volume.lock().unwrap() == 0 {
@@ -1404,14 +1439,15 @@ impl Peer {
         {
             return Some("Conexão sem imagem decodificada. Verifique o diagnóstico do transmissor e use a mesma versão nativa nos dois PCs.".into());
         }
-        if self.created.elapsed() > Duration::from_secs(25) {
-            let value = self.rtc.get_property("connection-state").ok()?;
-            let enum_value = glib_old::EnumValue::from_value(&value)?;
-            if !matches!(enum_value.get_nick(), "connected") {
-                return Some(
-                    "Não foi possível conectar diretamente. A rede pode exigir TURN.".into(),
-                );
-            }
+        if let Some(error) = self.progress.lock().unwrap().stalled(
+            std::time::Instant::now(),
+            self.video_frames.load(Ordering::Relaxed),
+            self.audio_frames.load(Ordering::Relaxed),
+            self.video_packets.load(Ordering::Relaxed),
+            self.audio_packets.load(Ordering::Relaxed),
+            self.connected(),
+        ) {
+            return Some(error.into());
         }
         None
     }
@@ -1516,7 +1552,9 @@ fn test_stream_case(
             view: None,
             volume: Arc::new(Mutex::new(100)),
             video_frames: Arc::default(),
+            video_packets: Arc::default(),
             audio_frames: Arc::default(),
+            audio_packets: Arc::default(),
             audio_level: Arc::default(),
             session: None,
             remote_ready: false,
@@ -1525,6 +1563,7 @@ fn test_stream_case(
             stats_pending: Arc::default(),
             pending: vec![],
             created: std::time::Instant::now(),
+            progress: Mutex::new(super::recovery::Progress::new(std::time::Instant::now())),
         };
         for (name, count) in [
             ("video_meter", receiver.video_frames.clone()),
@@ -1548,6 +1587,7 @@ fn test_stream_case(
                 .get_static_pad("src")
                 .unwrap(),
             receiver.audio_level.clone(),
+            None,
         );
         receiver
             .pipeline
@@ -1942,6 +1982,39 @@ pub fn check_runtime() -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn clock_loss_resumes_decoded_flow_without_reopening_the_stream() {
+        gst::init().unwrap();
+        let p = pipeline("audiotestsrc is-live=true samplesperbuffer=480 ! fakesink name=output sync=true signal-handoffs=true").unwrap();
+        let frames = Arc::new(AtomicU64::new(0));
+        let count = frames.clone();
+        p.get_by_name("output")
+            .unwrap()
+            .connect("handoff", false, move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+                None
+            })
+            .unwrap();
+        p.set_state(gst::State::Playing).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        p.set_state(gst::State::Paused).unwrap();
+        p.get_state(gst::ClockTime::from_seconds(1)).0.unwrap();
+        let before = frames.load(Ordering::Relaxed);
+        p.post_message(
+            gst::message::ClockLost::builder(&gst::SystemClock::obtain())
+                .src(&p)
+                .build(),
+        )
+        .unwrap();
+        assert!(pipe_error(&p).is_none());
+        std::thread::sleep(Duration::from_millis(150));
+        let after = frames.load(Ordering::Relaxed);
+        p.set_state(gst::State::Null).unwrap();
+        assert!(
+            after > before,
+            "CLOCK_LOST left playback paused until a manual reopen"
+        );
+    }
+    #[test]
     fn audio_level_verifies_real_decoded_sound_silence_and_mute() {
         gst::init().unwrap();
         for (wave, gain, expected) in [
@@ -1963,6 +2036,7 @@ mod tests {
                     .get_static_pad("src")
                     .unwrap(),
                 level.clone(),
+                None,
             );
             p.set_state(gst::State::Playing).unwrap();
             let done = p.get_bus().unwrap().timed_pop_filtered(

@@ -58,7 +58,7 @@ else
     bash scripts/test-windows-from-linux.sh --distribution-only
 fi
 phase='preparar commit revisavel'
-git add -- Cargo.toml Cargo.lock build.rs src scripts assets examples .github README.md .gitignore docs/atualizacoes.md docs/plano-r12.md docs/medicoes-20261113.json
+git add -- Cargo.toml Cargo.lock build.rs src scripts assets examples .github README.md .gitignore docs/atualizacoes.md docs/plano-r12.md docs/plano-estabilidade-20261117.md docs/medicoes-20261113.json
 if git grep --cached -I -l -E '^-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'; then
     echo 'Chave privada encontrada nos arquivos preparados; publicacao cancelada.' >&2; exit 1
 else

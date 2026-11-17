@@ -11,7 +11,8 @@ def main():
         files.extend(p for p in (root / folder).rglob('*')
                      if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc')
     files.extend(p for p in (root / 'docs').glob('*.md') if p.name in
-                 ('cliente-nativo.md', 'plano-r12.md', 'atualizacoes.md', 'auditoria-20261112.md'))
+                 ('cliente-nativo.md', 'plano-r12.md', 'plano-estabilidade-20261117.md',
+                  'atualizacoes.md', 'auditoria-20261112.md'))
     dist = root / 'dist'
     dist.mkdir(exist_ok=True)
     archive = dist / 'janja-nativo-fontes.zip'

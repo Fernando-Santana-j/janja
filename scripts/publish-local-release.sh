@@ -44,10 +44,15 @@ Transmissao de tela e audio para Windows e Linux.
 - Tela cheia preserva a imagem inteira por padrao.
 - Renderizacao mais leve e cliente sem instrumentacao de diagnostico dispensavel.
 - Ajustes na selecao do encoder AMD e testes de transmissao, audio e carga sintetica.
+- Conexoes P2P preservadas durante quedas da sinalizacao, com retomada de sala no servidor atualizado.
+- Recuperacao automatica de falhas de decodificacao de audio/video, preservando o volume.
+- Correcao de desconexoes por mensagens em transito e cancelamentos confirmados durante a reconexao.
 - Instaladores com atualizacoes assinadas pelo GitHub ao abrir o aplicativo.
 - Instalacao, atualizacao, rollback e desinstalacao verificados; Defender sem deteccoes nos arquivos Windows publicados.
 
 Instale uma vez com janja-setup-windows.exe ou sh janja-setup-linux.sh. Use os atalhos instalados para receber as proximas atualizacoes. Os portateis continuam com atualizacao manual.
+
+A retomada de salas exige tambem atualizar o servidor de sinalizacao. Os instaladores dos clientes nao atualizam o servidor. A reserva de uma sessao desconectada dura 120 segundos; P2P depende da conectividade entre os participantes.
 
 Linux: pacote local gerado em Arch Linux com $(getconf GNU_LIBC_VERSION). Algumas bibliotecas exigem essa versao; distribuicoes com glibc anterior precisam de compilacao propria. Esta publicacao usa os pacotes locais validados porque o GitHub Actions esta indisponivel na conta.
 

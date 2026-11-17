@@ -10,6 +10,7 @@ mod playback;
 pub mod portal;
 mod preferences;
 pub mod profile;
+mod recovery;
 mod room_access;
 mod rooms_ui;
 pub mod rtc;

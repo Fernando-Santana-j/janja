@@ -61,7 +61,7 @@ em `dist/publicacao.json`. O workflow disparado pela tag pode aparecer como
 bloqueado no Actions; ele não é utilizado pelo fluxo local.
 
 Para a próxima atualização, incremente o número `r` em `src/lib.rs`, por exemplo
-para `2026.11.14-r14-leve`, e execute o mesmo comando. Preserve a chave de assinatura
+para `2026.11.17-r14-estavel`, e execute o mesmo comando. Preserve a chave de assinatura
 e nunca mova uma tag publicada. Fazer upload apenas do código não atualiza os
 usuários: a atualização depende dos instaladores e do manifesto na Release.
 
@@ -83,6 +83,131 @@ não cria automaticamente um pacote compatível com glibc mais antiga.
 - Recuperação da instalação anterior quando uma atualização falha.
 - Testes de mídia, áudio, perdas, carga sintética, instalação e segurança ampliados.
 - Publicação pelo GitHub com alternativa local sem Actions.
+
+## r14: recuperação de conexão e mídia
+
+A versão `2026.11.17-r14-estavel` acrescenta recuperação automática quando a
+decodificação deixa de avançar, mesmo que só o áudio pare. A tentativa preserva
+o volume e as outras transmissões. Silêncio sem pacotes e tela estática não
+disparam reinícios; erros de relógio da pipeline também recebem tratamento.
+
+A queda da sinalização mantém a captura e as conexões P2P já estabelecidas.
+O servidor atualizado permite retomar a mesma identidade e sala, com reserva de
+120 segundos depois que detecta uma desconexão. Um reinício do servidor carrega
+o cache e dá 120 segundos para retomada a partir da sua volta; o período em que
+ficou desligado não encerra por si só as sessões que estavam ativas no snapshot.
+Sair explicitamente de uma sala continua encerrando a participação.
+
+O cache padrão é `state/session-cache.json`, relativo à pasta de trabalho do
+servidor; `JANJA_SESSION_FILE` permite mudar o caminho. No serviço Windows fica
+em `C:\ProgramData\Janja\state\session-cache.json`. Ele guarda somente hashes dos
+segredos de retomada e das senhas das salas, além dos dados de presença. Não contém
+mídia, nem senhas em texto. Preserve essa pasta; não envie o cache para o GitHub.
+Uma falha de gravação aparece no health check e no log do servidor.
+
+**Clientes e servidor precisam ser atualizados** para retomar as salas. O cache
+não reconstrói sessões que a versão anterior nunca salvou. Na troca inicial da
+r13 para r14, faça a atualização do servidor fora de uma transmissão importante.
+As atualizações dos instaladores continuam sendo apenas dos clientes.
+
+Para validar no Windows sem publicar:
+
+```bash
+cd /home/fernando/Downloads/janja
+bash scripts/test-windows-from-linux.sh
+```
+
+Esse teste foi concluído pelo proprietário em 17/11: executáveis e instalador
+Windows r14 conferidos, sem falhas nos testes. A pasta remota ainda se chama
+`janja-nativo-r12` para reutilizar o cache de compilação. A versão vem de `BUILD`
+em `src/lib.rs`, é incorporada ao instalador e conferida em `windows.build.json`;
+o nome da pasta não seleciona código antigo. Não é necessário renomeá-la.
+
+Depois que esse comando concluir sem erros, atualize o servidor já configurado
+no Windows. O comando preserva a configuração e prepara a permissão privada do
+cache para a conta do serviço. Exige o mesmo SSH administrativo da instalação:
+
+```bash
+ssh -F /dev/null -i /home/fernando/.ssh/windows_caixa caixa@192.168.1.11 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:/Users/Caixa/Downloads/janja-nativo-r12/scripts/install-janja-server.ps1'
+```
+
+Para gerar, validar e publicar os instaladores dos clientes, use
+`bash scripts/publish-release.sh --local`. Esse fluxo já executa a validação
+Windows completa, sem precisar rodar o primeiro comando separadamente. O
+comando SSH de instalação do servidor continua necessário nesta atualização.
+
+Sequência para colocar a r14 em uso, no terminal Linux do proprietário:
+
+1. Fechar as transmissões e executar o comando SSH de instalação do servidor
+   acima. Ele preserva a configuração existente, reinicia o serviço e verifica
+   a retomada de sessões e a disponibilidade do cache privado. Se a conta SSH
+   não estiver elevada, executar esse mesmo script em PowerShell administrador
+   no Windows, sem mudar permissões do antivírus:
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\Caixa\Downloads\janja-nativo-r12\scripts\install-janja-server.ps1
+   ```
+
+2. Conferir o servidor através do endereço público:
+
+   ```bash
+   curl --fail --silent --show-error --max-time 20 https://infocoretech.com.br/janja/health |
+     python3 -c 'import json,sys; h=json.load(sys.stdin); print(json.dumps(h,indent=2)); assert h.get("build")=="2026.11.17-r14-estavel" and h.get("sessionRecovery") is True and h.get("sessionCacheHealthy") is True, "Servidor incorreto ou cache indisponivel"'
+   ```
+
+3. Publicar os instaladores com `bash scripts/publish-release.sh --local`.
+   O fluxo recompila os pacotes e repete a validação Windows como parte da
+   publicação. Não é necessário fazer commit, tag ou uploads manualmente.
+   Só continuar quando terminar com `Publicacao local concluida`.
+
+4. Conferir a Release publicada:
+
+   ```bash
+   gh release view 2026.11.17-r14-estavel --repo Fernando-Santana-j/janja --json tagName,isDraft,isPrerelease,url,assets
+   python3 scripts/verify-release.py --directory dist/publicado-2026.11.17-r14-estavel
+   ```
+
+5. Atualizar o cliente do Linux, sem `sudo` para o próprio Janja:
+
+   ```bash
+   sh dist/janja-setup-linux.sh
+   "$HOME/.local/share/janja/janja-linux" --version
+   "$HOME/.local/share/janja/launch"
+   ```
+
+6. No Windows, fechar o Janja e abrir o atalho instalado para receber a
+   atualização. Quem ainda usa somente o portátil deve executar o instalador
+   uma vez. No PC usado para compilar, o instalador já está em Downloads;
+   para instalar silenciosamente e conferir a versão no PowerShell da conta
+   que usa o aplicativo:
+
+   ```powershell
+   $setup = Join-Path $env:USERPROFILE 'Downloads\janja-setup-windows.exe'
+   $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+   if ($p.ExitCode -ne 0) { throw 'Instalacao do Janja falhou.' }
+   $dir = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Janja').InstallLocation
+   $v = (Get-Content -LiteralPath (Join-Path $dir 'version.txt') -Raw).Trim()
+   if ($v -ne '2026.11.17-r14-estavel') { throw "Versao instalada incorreta: $v" }
+   Write-Host "Janja instalado: $v"
+   Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Janja.lnk')
+   ```
+
+7. Distribuir o endereço da Release aos amigos, para baixarem o instalador do
+   sistema deles. Não precisam de MSYS2, Rust, GTK ou GStreamer no Windows.
+   Abrir pelo atalho instalado ativa a consulta de atualizações; o portátil
+   isolado continua com atualização manual. No Linux, permanece a restrição
+   de glibc da máquina onde o pacote foi compilado.
+
+Nenhum desses comandos exige apagar perfis, senhas salvas, a chave original de
+atualização ou o cache do servidor. Não seguir para a próxima etapa se houver erro.
+
+Validação real recomendada, com dois clientes r14 e o servidor r14: assistir a
+uma fonte com movimento e som contínuo; interromper somente a sinalização,
+mantendo a rede P2P; confirmar que imagem e áudio continuam; reiniciar o servidor
+e confirmar o retorno dos mesmos participantes e sala, sem nova senha. Repetir
+cancelando uma visualização durante a queda e verificar que ela não reaparece.
+Os testes automatizados locais e os limites estão em
+[`plano-estabilidade-20261117.md`](plano-estabilidade-20261117.md).
 
 ## Chave de publicação
 

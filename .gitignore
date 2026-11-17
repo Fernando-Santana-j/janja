@@ -6,6 +6,7 @@
 !/docs/plano-r12.md
 !/docs/atualizacoes.md
 !/docs/medicoes-20261113.json
+!/docs/plano-estabilidade-20261117.md
 /bugs/
 /target/
 /dist/
@@ -28,6 +29,7 @@ __pycache__/
 /server.env.ps1
 /server.json
 /janja-master-password.json
+/state/
 /.sala-cloudflare/
 /logs/
 *.log

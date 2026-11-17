@@ -22,6 +22,7 @@ use tokio_tungstenite::{
         protocol::{Role, WebSocketConfig},
     },
 };
+mod sessions;
 
 const MAX_PEOPLE: usize = 8;
 const MAX_MESSAGE: usize = 65_536;
@@ -43,12 +44,16 @@ struct Room {
     channels: HashMap<u64, PrivateRoom>,
     next_channel: u64,
     master_password: Option<RoomPassword>,
+    sessions: HashMap<u64, sessions::Session>,
+    cache: Option<std::path::PathBuf>,
+    cache_failed: bool,
 }
+#[derive(Clone, Serialize, Deserialize)]
 struct PrivateRoom {
     name: String,
     password: Option<RoomPassword>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoomPassword {
     salt: [u8; 16],
@@ -71,7 +76,7 @@ struct Peer {
     info: Person,
     tx: mpsc::Sender<Value>,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Person {
     id: u64,
     name: String,
@@ -87,6 +92,8 @@ enum Input {
         name: String,
         #[serde(default)]
         protocol: Option<u8>,
+        #[serde(default)]
+        resume: Option<String>,
     },
     CreateRoom {
         name: String,
@@ -105,9 +112,13 @@ enum Input {
     },
     Subscribe {
         to: u64,
+        #[serde(default)]
+        session: Option<String>,
     },
     Unsubscribe {
         to: u64,
+        #[serde(default)]
+        request: Option<u64>,
     },
     Signal {
         to: u64,
@@ -185,6 +196,9 @@ impl Room {
             .retain(|id, _| self.memberships.values().any(|r| r == id));
     }
     fn broadcast(&self) {
+        self.broadcast_departure(None);
+    }
+    fn broadcast_departure(&self, departed: Option<(u64, u64)>) {
         for (id, peer) in &self.peers {
             if let Some(room) = self.memberships.get(id) {
                 let mut people: Vec<_> = self
@@ -194,7 +208,13 @@ impl Room {
                     .map(|(_, p)| p.info.clone())
                     .collect();
                 people.sort_by_key(|p| p.id);
-                send(&peer.tx, json!({"type":"room","people":people}));
+                let mut message = json!({"type":"room","people":people});
+                if let Some((person, previous_room)) = departed
+                    && previous_room == *room
+                {
+                    message["departed"] = json!(person);
+                }
+                send(&peer.tx, message);
             }
             if peer.modern {
                 send(&peer.tx, self.listing());
@@ -208,6 +228,7 @@ impl Room {
         true
     }
     fn select(&mut self, id: u64, room: Option<u64>) -> bool {
+        let previous = self.memberships.get(&id).copied();
         if let Some(peer) = self.peers.get_mut(&id) {
             let selected =
                 room.and_then(|r| self.channels.get(&r).map(|v| json!({"id":r,"name":v.name})));
@@ -221,7 +242,11 @@ impl Room {
                 self.memberships.remove(&id);
             }
             self.prune();
-            self.broadcast();
+            self.broadcast_departure(
+                previous
+                    .filter(|previous| Some(*previous) != room)
+                    .map(|previous| (id, previous)),
+            );
         }
         true
     }
@@ -305,21 +330,44 @@ impl Room {
                 self.broadcast();
                 true
             }
-            Input::Subscribe { to } | Input::Unsubscribe { to } => {
+            Input::Subscribe { to, .. } | Input::Unsubscribe { to, .. } => {
                 let subscribe = matches!(input, Input::Subscribe { .. });
-                if to == id
-                    || !self.memberships.contains_key(&id)
-                    || self.memberships.get(&id) != self.memberships.get(&to)
+                if to == id || !self.memberships.contains_key(&id) {
+                    return false;
+                }
+                // The target can leave while an already valid message is in flight.
+                if !self.memberships.contains_key(&to) {
+                    return true;
+                }
+                if self.memberships.get(&id) != self.memberships.get(&to) {
+                    return false;
+                }
+                let (session, request) = match input {
+                    Input::Subscribe { session, .. } => (session, None),
+                    Input::Unsubscribe { request, .. } => (None, request),
+                    _ => unreachable!(),
+                };
+                if request == Some(0) {
+                    return false;
+                }
+                if session
+                    .as_ref()
+                    .is_some_and(|s| !s.starts_with("native-v2-") || s.len() > 127)
                 {
                     return false;
                 }
                 if let Some(peer) = self.peers.get(&to)
                     && (!subscribe || peer.info.streaming)
                 {
-                    return send(
-                        &peer.tx,
-                        json!({"type":if subscribe {"subscribe"} else {"unsubscribe"}, "from":id}),
-                    );
+                    let mut message =
+                        json!({"type":if subscribe {"subscribe"} else {"unsubscribe"}, "from":id});
+                    if let Some(session) = session {
+                        message["session"] = json!(session);
+                    }
+                    if let Some(request) = request {
+                        message["request"] = json!(request);
+                    }
+                    send(&peer.tx, message);
                 }
                 true // A publisher can leave while a subscription is in flight.
             }
@@ -328,19 +376,25 @@ impl Room {
                     || (stream != id && stream != to)
                     || !data.is_object()
                     || !self.memberships.contains_key(&id)
-                    || self.memberships.get(&id) != self.memberships.get(&to)
                 {
+                    return false;
+                }
+                if !self.memberships.contains_key(&to) {
+                    return true;
+                }
+                if self.memberships.get(&id) != self.memberships.get(&to) {
                     return false;
                 }
                 if !self.peers.get(&stream).is_some_and(|p| p.info.streaming) {
                     return true;
                 }
-                self.peers.get(&to).is_none_or(|p| {
+                if let Some(p) = self.peers.get(&to) {
                     send(
                         &p.tx,
                         json!({"type":"signal", "from":id, "stream":stream, "data":data}),
-                    )
-                })
+                    );
+                }
+                true
             }
             Input::Join { .. } => false,
         }
@@ -356,6 +410,7 @@ async fn socket<S: AsyncRead + AsyncWrite + Unpin>(mut ws: WebSocketStream<S>, a
         key,
         name,
         protocol,
+        resume,
     }) = serde_json::from_str(&raw)
     else {
         return;
@@ -373,9 +428,26 @@ async fn socket<S: AsyncRead + AsyncWrite + Unpin>(mut ws: WebSocketStream<S>, a
         return;
     }
     let (tx, mut rx) = mpsc::channel(64);
+    let connection_tx = tx.clone();
     let id = {
         let mut room = app.room.lock().unwrap();
-        if room.peers.len() >= 32
+        room.expire_sessions(Instant::now());
+        if let Some((id, token)) = room.resume(resume.as_deref(), &tx) {
+            send(
+                &tx,
+                json!({"type":"welcome", "id":id,"iceServers":app.ice,"protocol":2,"resume":token,"resumed":true}),
+            );
+            if let Some(channel) = room.memberships.get(&id).and_then(|id| {
+                room.channels
+                    .get(id)
+                    .map(|r| json!({"id":id,"name":r.name}))
+            }) {
+                send(&tx, json!({"type":"entered","room":channel,"resumed":true}));
+            }
+            room.persist_sessions();
+            room.broadcast();
+            Some(id)
+        } else if room.peers.len() >= 32
             || (protocol != Some(2)
                 && room.memberships.values().filter(|r| **r == 0).count() >= MAX_PEOPLE)
         {
@@ -383,9 +455,14 @@ async fn socket<S: AsyncRead + AsyncWrite + Unpin>(mut ws: WebSocketStream<S>, a
         } else {
             room.next += 1;
             let id = room.next;
+            let token = if protocol == Some(2) {
+                room.new_session(id)
+            } else {
+                None
+            };
             send(
                 &tx,
-                json!({"type":"welcome", "id":id, "iceServers":app.ice,"protocol":2}),
+                json!({"type":"welcome", "id":id, "iceServers":app.ice,"protocol":2,"resume":token,"resumed":false}),
             );
             room.peers.insert(
                 id,
@@ -406,6 +483,7 @@ async fn socket<S: AsyncRead + AsyncWrite + Unpin>(mut ws: WebSocketStream<S>, a
             if protocol != Some(2) {
                 room.memberships.insert(id, 0);
             }
+            room.persist_sessions();
             room.broadcast();
             Some(id)
         }
@@ -420,6 +498,8 @@ async fn socket<S: AsyncRead + AsyncWrite + Unpin>(mut ws: WebSocketStream<S>, a
             .await;
         return;
     };
+    let connection_owner = connection_tx.downgrade();
+    drop(connection_tx);
     let (mut writer, mut reader) = ws.split();
     let period = Duration::from_secs(20);
     let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
@@ -442,18 +522,23 @@ async fn socket<S: AsyncRead + AsyncWrite + Unpin>(mut ws: WebSocketStream<S>, a
                         count += 1;
                         if count > 120 { break; }
                         let Ok(input) = serde_json::from_str::<Input>(&raw) else { break; };
+                        let mut room = app.room.lock().unwrap();
+                        let Some(owner) = connection_owner.upgrade() else { break; };
+                        if !room.peers.get(&id).is_some_and(|p| p.tx.same_channel(&owner)) { break; }
                         if matches!(input, Input::CreateRoom { .. } | Input::EnterRoom { .. }) {
                             if room_attempt.elapsed() < Duration::from_millis(500) {
-                                app.room.lock().unwrap().room_error(id, "Aguarde um instante antes de tentar novamente.");
+                                room.room_error(id, "Aguarde um instante antes de tentar novamente.");
                                 continue;
                             }
                             room_attempt = Instant::now();
                         }
-                        if !app.room.lock().unwrap().route(id, input) { break; }
+                        let save = matches!(input, Input::CreateRoom { .. } | Input::EnterRoom { .. } | Input::LeaveRoom | Input::State { .. });
+                        if !room.route(id, input) { break; }
+                        if save { room.persist_sessions(); }
                         continue;
                     }
                     Some(Ok(Message::Pong(_))) => { last_seen = Instant::now(); continue; }
-                    Some(Ok(Message::Ping(data))) => Some(Message::Pong(data)),
+                    Some(Ok(Message::Ping(data))) => { last_seen = Instant::now(); Some(Message::Pong(data)) },
                     _ => break,
                 }
             }
@@ -469,10 +554,9 @@ async fn socket<S: AsyncRead + AsyncWrite + Unpin>(mut ws: WebSocketStream<S>, a
         }
     }
     let mut room = app.room.lock().unwrap();
-    room.peers.remove(&id);
-    room.memberships.remove(&id);
-    room.prune();
-    room.broadcast();
+    if let Some(owner) = connection_owner.upgrade() {
+        room.disconnect(id, &owner, Instant::now());
+    }
 }
 
 fn response<'a>(status: StatusCode, mime: &'static str, body: &'a str) -> Response<&'a str> {
@@ -564,7 +648,10 @@ async fn connection(mut stream: TcpStream, app: Shared) -> Result<(), ServerErro
     }
     let ws_path = if app.public { "/janja/ws" } else { "/ws" };
     if app.public && req.uri().path() == "/janja/health" {
-        let body = json!({"status":"ok","service":"janja-signaling","protocol":2,"passwordOptional":true,"masterPasswordConfigured":app.room.lock().unwrap().master_password.is_some(),"build":crate::BUILD}).to_string();
+        let body = {
+            let room = app.room.lock().unwrap();
+            json!({"status":"ok","service":"janja-signaling","protocol":2,"passwordOptional":true,"masterPasswordConfigured":room.master_password.is_some(),"sessionRecovery":true,"sessionCacheHealthy":!room.cache_failed,"build":crate::BUILD}).to_string()
+        };
         return write_http(
             &mut stream,
             response(StatusCode::OK, "application/json", &body),
@@ -664,7 +751,7 @@ pub async fn run(config: Option<&str>) -> Result<(), Box<dyn Error>> {
         key,
         origin,
         ice,
-        room: Mutex::new(Room::default()),
+        room: Mutex::new(Room::load_sessions(sessions::cache_path())?),
         connections: Arc::new(Semaphore::new(32)),
     });
     serve(app, port).await
@@ -697,9 +784,10 @@ pub async fn run_janja() -> Result<(), Box<dyn Error>> {
             key: String::new(),
             origin: Some("https://infocoretech.com.br".into()),
             ice: default_ice(),
-            room: Mutex::new(Room {
-                master_password,
-                ..Room::default()
+            room: Mutex::new({
+                let mut room = Room::load_sessions(sessions::cache_path())?;
+                room.master_password = master_password;
+                room
             }),
             connections: Arc::new(Semaphore::new(32)),
         }),
@@ -712,9 +800,11 @@ async fn serve(app: Shared, port: u16) -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
     println!("Sala em http://{}", listener.local_addr()?);
     let http_slots = Arc::new(Semaphore::new(64));
+    let mut cleanup = tokio::time::interval(Duration::from_secs(20));
     loop {
         let (stream, _) = tokio::select! {
             result = listener.accept() => result?,
+            _ = cleanup.tick() => { app.room.lock().unwrap().expire_sessions(Instant::now()); continue; },
             _ = tokio::signal::ctrl_c() => return Ok(()),
         };
         let Ok(permit) = http_slots.clone().try_acquire_owned() else {
@@ -731,6 +821,54 @@ async fn serve(app: Shared, port: u16) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_departed_or_slow_recipient_does_not_disconnect_the_sender() {
+        let mut room = Room::default();
+        room.memberships.insert(1, 3);
+        assert!(
+            room.route(
+                1,
+                Input::Subscribe {
+                    to: 2,
+                    session: None
+                }
+            ),
+            "A departure race disconnected an innocent viewer"
+        );
+        let (tx, _rx) = mpsc::channel(1);
+        assert!(send(&tx, json!({"type":"pending"})));
+        room.peers.insert(
+            2,
+            Peer {
+                modern: true,
+                info: Person {
+                    id: 2,
+                    name: "Amigo".into(),
+                    streaming: true,
+                },
+                tx,
+            },
+        );
+        room.memberships.insert(2, 3);
+        assert!(
+            room.route(
+                1,
+                Input::Subscribe {
+                    to: 2,
+                    session: None
+                }
+            ),
+            "A full recipient queue disconnected the sender"
+        );
+        assert!(room.route(
+            1,
+            Input::Signal {
+                to: 2,
+                stream: 2,
+                data: json!({"candidate":null})
+            }
+        ));
+    }
     #[test]
     fn room_selection_requires_delivery_before_changing_membership() {
         let mut room = Room::default();
@@ -816,7 +954,13 @@ mod tests {
             },
         );
         assert!(!rooms.memberships.contains_key(&2));
-        assert!(!rooms.route(2, Input::Subscribe { to: 1 }));
+        assert!(!rooms.route(
+            2,
+            Input::Subscribe {
+                to: 1,
+                session: None
+            }
+        ));
         rooms.route(
             2,
             Input::EnterRoom {
@@ -951,7 +1095,13 @@ mod tests {
             }
         ));
         assert!(rooms.route(1, Input::State { streaming: true }));
-        assert!(!rooms.route(3, Input::Subscribe { to: 1 }));
+        assert!(!rooms.route(
+            3,
+            Input::Subscribe {
+                to: 1,
+                session: None
+            }
+        ));
         assert!(!rooms.route(
             3,
             Input::Signal {
@@ -1176,6 +1326,13 @@ mod tests {
                 .len(),
             2
         );
+        friend
+            .send(Message::Text(
+                json!({"type":"leaveRoom"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        assert!(receive(&mut friend, "entered").await["room"].is_null());
         friend.close(None).await.unwrap();
         assert_eq!(
             receive(&mut owner, "room").await["people"]
@@ -1452,7 +1609,13 @@ mod tests {
         );
         room.memberships.insert(1, 0);
         room.memberships.insert(2, 0);
-        assert!(room.route(1, Input::Subscribe { to: 2 }));
+        assert!(room.route(
+            1,
+            Input::Subscribe {
+                to: 2,
+                session: None
+            }
+        ));
         assert_eq!(
             rx.recv().await.unwrap(),
             json!({"type":"subscribe","from":1})
@@ -1474,6 +1637,24 @@ mod tests {
             }
         ));
         assert_eq!(rx.recv().await.unwrap()["from"], 1);
+        assert!(room.route(
+            1,
+            Input::Unsubscribe {
+                to: 2,
+                request: Some(23)
+            }
+        ));
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            json!({"type":"unsubscribe","from":1,"request":23})
+        );
+        assert!(!room.route(
+            1,
+            Input::Unsubscribe {
+                to: 2,
+                request: Some(0)
+            }
+        ));
         assert!(room.route(2, Input::State { streaming: false }));
         assert_eq!(room.snapshot()["people"][0]["streaming"], false);
     }
